@@ -1,4 +1,4 @@
-import { MAX_IMPORT_BYTES } from './catalog.mjs';
+import { MAX_IMPORT_BYTES, MAX_CATALOG_BYTES, utf8ByteLength } from './catalog.mjs';
 
 export const OWNER = 'budhi-halim';
 export const OWNER_ID = 121861881;
@@ -10,11 +10,10 @@ export const WORKFLOW = 'studio.yml';
 export const WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
 export const API_VERSION = '2026-03-10';
 export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
+export const TRANSFER_TIMEOUT_MS = 15 * 60 * 1000;
 const API_ROOT = 'https://api.github.com';
 const REPO_PATH = `/repos/${REPOSITORY}`;
-const CATALOG_LIMIT = 16 * 1024 * 1024;
 const METADATA_LIMIT = 5 * 1024 * 1024;
-const encoder = new TextEncoder();
 
 export class GitHubError extends Error {
   constructor(message, status = 0, uncertain = status === 0 || status >= 500) {
@@ -158,7 +157,7 @@ export class GitHubClient {
   #timeout;
   #uploadTimeout;
 
-  constructor(token = '', fetchImpl = globalThis.fetch, { timeoutMs = 35000, uploadTimeoutMs = 90000 } = {}) {
+  constructor(token = '', fetchImpl = globalThis.fetch, { timeoutMs = 35000, uploadTimeoutMs = TRANSFER_TIMEOUT_MS } = {}) {
     if (typeof fetchImpl !== 'function') throw new TypeError('A network implementation is required.');
     if (token !== '' && !isFineGrainedToken(token)) throw new GitHubError('Use a fine-grained GitHub token beginning with github_pat_ for the one-time setup.', 422, false);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(uploadTimeoutMs) || uploadTimeoutMs < 1) throw new TypeError('Request timeouts must be positive integers.');
@@ -244,7 +243,7 @@ export class GitHubClient {
           return { accepted: true, runId: object(result) ? positiveId(result.workflow_run_id) : null };
         }
         if (response.status === 204) throw invalidResponse();
-        const text = await responseText(response, raw ? CATALOG_LIMIT : METADATA_LIMIT, controller.signal);
+        const text = await responseText(response, raw ? MAX_CATALOG_BYTES : METADATA_LIMIT, controller.signal);
         checkCurrent();
         if (raw) return text;
         try { return JSON.parse(text); } catch { throw invalidResponse(); }
@@ -291,12 +290,12 @@ export class GitHubClient {
     }
   }
 
-  readCanonical() { return this.#request(`${REPO_PATH}/contents/data.json?ref=${BRANCH}`, { raw: true }); }
+  readCanonical() { return this.#request(`${REPO_PATH}/contents/data.json?ref=${BRANCH}`, { raw: true, timeout: this.#uploadTimeout }); }
 
   async stageBlob(text) {
     if (!this.connected) throw new GitHubError('Unlock your local login before submitting JSON.', 401, false);
     if (typeof text !== 'string' || !text.trim()) throw new GitHubError('Provide validated JSON text before uploading.', 422, false);
-    if (encoder.encode(text).byteLength > MAX_IMPORT_BYTES) throw new GitHubError('The JSON batch exceeds 5 MiB. Split the batch and try again.', 413, false);
+    if (utf8ByteLength(text, MAX_IMPORT_BYTES) > MAX_IMPORT_BYTES) throw new GitHubError('The JSON batch exceeds 100 MB. Select a smaller batch and try again.', 413, false);
     const blob = await this.#request(`${REPO_PATH}/git/blobs`, { method: 'POST', body: { content: text, encoding: 'utf-8' }, timeout: this.#uploadTimeout });
     if (!object(blob) || !hex(blob.sha, 40)) throw new GitHubError('GitHub did not return a valid upload receipt. The batch has not been submitted.', 502, false);
     return blob.sha;

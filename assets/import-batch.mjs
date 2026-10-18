@@ -1,4 +1,6 @@
-import { MAX_IMPORT_BYTES, parseCatalog, mergeCatalog } from './catalog.mjs';
+import {
+  MAX_IMPORT_BYTES, importByteLimit, parseCatalog, mergeCatalogBatches, measureCatalogBytes, utf8ByteLength,
+} from './catalog.mjs';
 
 /** A batch failure is always plain text; the caller must render it as text. */
 export class ImportBatchError extends Error {
@@ -72,7 +74,8 @@ function forFile(filename, error) {
  * No partial batch is returned: any invalid file, conflict, or size failure
  * rejects the entire operation. The result is one valid JSON array for upload.
  */
-export function buildFileBatch(files) {
+export function buildFileBatch(files, { maximumBytes = MAX_IMPORT_BYTES } = {}) {
+  const maximum = importByteLimit(maximumBytes);
   const ordered = sortFiles(files);
   if (!ordered.length) throw new ImportBatchError('Choose at least one JSON file.');
 
@@ -87,36 +90,42 @@ export function buildFileBatch(files) {
     }
   }
 
-  const encoder = new TextEncoder();
   const summaries = [];
-  let incoming = [];
   let totalBytes = 0;
-  let duplicateVariationsAcrossFiles = 0;
 
-  for (const file of ordered) {
-    try {
-      const parsed = parseCatalog(file.text);
-      const bytes = encoder.encode(file.text).byteLength;
-      totalBytes += bytes;
-      if (totalBytes > MAX_IMPORT_BYTES) {
-        throw new ImportBatchError('The selected files together exceed the 5 MiB batch limit. Select fewer files or split the batch.', { code: 'batch_too_large' });
+  // Yield one parsed file at a time. The shared merge maintains its indexes, so
+  // appending hundreds of files does not repeatedly clone the growing catalog.
+  function* catalogs() {
+    for (const file of ordered) {
+      try {
+        const parsed = parseCatalog(file.text, { maximumBytes: maximum });
+        const bytes = utf8ByteLength(file.text);
+        totalBytes += bytes;
+        if (totalBytes > maximum) {
+          throw new ImportBatchError('The selected files together exceed the ' + maximum.toLocaleString('en-US') + ' UTF-8 byte batch budget (100 MB GitHub maximum). Select fewer files or split the batch.', { code: 'batch_too_large' });
+        }
+        const variations = parsed.reduce((count, theme) => count + theme.variations.length, 0);
+        if (!parsed.length || !variations) {
+          throw new ImportBatchError('Each file must contain at least one theme with a variation.', { code: 'empty_file' });
+        }
+        summaries.push({ name: file.name, bytes, themes: parsed.length, variations });
+        yield parsed;
+      } catch (error) {
+        throw forFile(file.name, error);
       }
-      const variations = parsed.reduce((count, theme) => count + theme.variations.length, 0);
-      if (!parsed.length || !variations) {
-        throw new ImportBatchError('Each file must contain at least one theme with a variation.', { code: 'empty_file' });
-      }
-      const merged = mergeCatalog(incoming, parsed);
-      incoming = merged.catalog;
-      duplicateVariationsAcrossFiles += merged.duplicateVariations;
-      summaries.push({ name: file.name, bytes, themes: parsed.length, variations });
-    } catch (error) {
-      throw forFile(file.name, error);
     }
   }
-
-  const source = JSON.stringify(incoming);
-  if (encoder.encode(source).byteLength > MAX_IMPORT_BYTES) {
-    throw new ImportBatchError('The combined JSON payload exceeds the 5 MiB batch limit. Select fewer files or split the batch.', { code: 'payload_too_large' });
+  let result;
+  try {
+    result = mergeCatalogBatches([], catalogs());
+  } catch (error) {
+    if (Number.isInteger(error.batchIndex)) throw forFile(ordered[error.batchIndex].name, error);
+    throw error;
   }
-  return { source, incoming, files: summaries, duplicateVariationsAcrossFiles };
+  const incoming = result.catalog;
+  if (measureCatalogBytes(incoming, { maximum }) > maximum) {
+    throw new ImportBatchError('The combined JSON payload exceeds the ' + maximum.toLocaleString('en-US') + ' UTF-8 byte batch budget (100 MB GitHub maximum). Select fewer files or split the batch.', { code: 'payload_too_large' });
+  }
+  const source = JSON.stringify(incoming);
+  return { source, incoming, files: summaries, duplicateVariationsAcrossFiles: result.duplicateVariations };
 }

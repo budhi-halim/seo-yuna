@@ -17,7 +17,7 @@ function setup(overrides = {}) {
     now: () => clock,
     ...overrides,
   });
-  function press(key, properties = {}) {
+  function down(key, properties = {}) {
     let prevented = false;
     const event = {
       key,
@@ -28,7 +28,15 @@ function setup(overrides = {}) {
     const handled = handler.handle(event);
     return { handled, prevented };
   }
-  return { context, calls, handler, press, advance: (ms) => { clock += ms; } };
+  function up(key, properties = {}) {
+    return handler.release({ key, ...properties });
+  }
+  function press(key, properties = {}) {
+    const result = down(key, properties);
+    up(key);
+    return result;
+  }
+  return { context, calls, handler, down, up, press, advance: (ms) => { clock += ms; } };
 }
 
 test('circular navigation wraps at the ends and across multiple cycles', () => {
@@ -114,17 +122,145 @@ test('Q pair expires after 350 ms and accepts the window boundary', () => {
   assert.deepEqual(state.calls.at(-1), ['copyTheme', true]);
 });
 
-test('key auto-repeat never navigates or turns a held Q into a double press', () => {
+test('held Q/E never spam the clipboard or turn a held Q into a double press', () => {
   const state = setup();
-  state.press('q');
+  state.down('q');
   state.advance(50);
-  for (const key of ['q', 'a', 's', 'e']) {
-    assert.deepEqual(state.press(key, { repeat: true }), { handled: false, prevented: false });
+  for (let index = 0; index < 8; index++) {
+    assert.deepEqual(state.down('q', { repeat: true }), { handled: false, prevented: false });
   }
+  // Even a malformed second non-repeat keydown is not a distinct stroke.
+  assert.deepEqual(state.down('q'), { handled: false, prevented: false });
   assert.deepEqual(state.calls, [['copyTheme', true]]);
+  state.up('q');
   state.advance(50);
   state.press('q');
   assert.deepEqual(state.calls.at(-1), ['copyTheme', false]);
+  state.down('e');
+  for (let index = 0; index < 8; index++) state.down('e', { repeat: true });
+  assert.equal(state.calls.filter(([kind]) => kind === 'copyPrompt').length, 1);
+  state.up('e');
+  state.press('e');
+  assert.equal(state.calls.filter(([kind]) => kind === 'copyPrompt').length, 2);
+});
+
+test('holding A/D/W/S uses every native repeat and stops immediately on release', () => {
+  for (const [key, action, delta] of [
+    ['a', 'theme', -1], ['d', 'theme', 1], ['w', 'variation', -1], ['s', 'variation', 1],
+  ]) {
+    const state = setup();
+    assert.deepEqual(state.down(key), { handled: true, prevented: true });
+    for (let index = 0; index < 10; index++) {
+      state.advance(33);
+      assert.deepEqual(state.down(key, { repeat: true }), { handled: true, prevented: true });
+    }
+    assert.deepEqual(state.calls, Array.from({ length: 11 }, () => [action, delta]));
+    assert.equal(state.up(key), true);
+    assert.deepEqual(state.down(key, { repeat: true }), { handled: false, prevented: false });
+    assert.equal(state.calls.length, 11);
+    // Waiting cannot move anything: the controller does not schedule repeat timers.
+    state.advance(10000);
+    assert.equal(state.calls.length, 11);
+    assert.deepEqual(state.press(key), { handled: true, prevented: true });
+  }
+});
+
+test('long holds wrap across large theme lists and each current variation list', () => {
+  const variationCounts = Array.from({ length: 300 }, (_, index) => index % 2 ? 8 : 4);
+  let theme = 0;
+  let variation = 0;
+  let moves = 0;
+  const state = setup({
+    onTheme(delta) {
+      theme = wrapIndex(theme, delta, variationCounts.length);
+      variation = wrapIndex(variation, 0, variationCounts[theme]);
+      state.context.themeId = `theme-${theme}`;
+      state.handler.resetCopyGesture();
+      moves++;
+    },
+    onVariation(delta) {
+      variation = wrapIndex(variation, delta, variationCounts[theme]);
+      state.handler.resetCopyGesture();
+      moves++;
+    },
+  });
+  function hold(key, repeats) {
+    state.down(key);
+    for (let index = 0; index < repeats; index++) state.down(key, { repeat: true });
+    state.up(key);
+  }
+  hold('d', 900);
+  assert.equal(theme, 1);
+  hold('w', 31);
+  assert.equal(variation, 0);
+  hold('s', 17);
+  assert.equal(variation, 2);
+  hold('a', 601);
+  assert.equal(theme, 299);
+  assert.equal(moves, 901 + 32 + 18 + 602);
+});
+
+test('repeat cannot start navigation without a fresh keydown in an enabled reader', () => {
+  const state = setup();
+  for (const key of ['a', 'd', 'w', 's']) {
+    assert.deepEqual(state.down(key, { repeat: true }), { handled: false, prevented: false });
+  }
+  state.down('d');
+  state.handler.reset(); // Blur, hidden page, dialog opening, or focus/pointer change.
+  assert.deepEqual(state.down('d', { repeat: true }), { handled: false, prevented: false });
+  assert.deepEqual(state.calls, [['theme', 1]]);
+  state.up('d');
+  state.press('d');
+  assert.deepEqual(state.calls, [['theme', 1], ['theme', 1]]);
+});
+
+test('typing, modifiers, composition, or disabled dialogs stop a hold without consuming input', () => {
+  for (const properties of [
+    { target: { closest: () => ({}) } }, { isComposing: true },
+    { ctrlKey: true }, { altKey: true }, { metaKey: true }, { defaultPrevented: true },
+  ]) {
+    const state = setup();
+    state.down('w');
+    assert.deepEqual(state.down('w', { repeat: true, ...properties }), { handled: false, prevented: false });
+    assert.deepEqual(state.down('w', { repeat: true }), { handled: false, prevented: false });
+    assert.deepEqual(state.calls, [['variation', -1]]);
+    state.up('w');
+    state.press('w');
+    assert.deepEqual(state.calls, [['variation', -1], ['variation', -1]]);
+  }
+  const state = setup();
+  state.down('s');
+  state.context.enabled = false;
+  assert.deepEqual(state.down('s', { repeat: true }), { handled: false, prevented: false });
+  state.context.enabled = true;
+  assert.deepEqual(state.down('s', { repeat: true }), { handled: false, prevented: false });
+  assert.deepEqual(state.calls, [['variation', 1]]);
+});
+
+test('key releases in typing controls are retained and do not interrupt quick independent taps', () => {
+  const state = setup();
+  state.down('a');
+  assert.equal(state.up('A', { target: { closest: () => ({}) }, defaultPrevented: true }), true);
+  for (let index = 0; index < 20; index++) {
+    state.advance(1);
+    assert.deepEqual(state.press('a'), { handled: true, prevented: true });
+  }
+  assert.equal(state.calls.length, 21);
+});
+
+test('Q remains synchronous and double-Q survives the clipboard fallback focus reset', () => {
+  const copied = [];
+  const state = setup({
+    onCopyTheme(withNumber) {
+      copied.push(withNumber);
+      state.handler.reset(); // A temporary clipboard textarea receives and releases focus.
+    },
+  });
+  state.press('q');
+  assert.deepEqual(copied, [true]);
+  state.advance(50);
+  state.press('q');
+  assert.deepEqual(copied, [true, false]);
 });
 
 test('intervening navigation or an unrelated key starts a new Q gesture', () => {

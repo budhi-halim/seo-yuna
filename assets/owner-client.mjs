@@ -1,4 +1,4 @@
-import { GitHubClient, GitHubError, OWNER, isFineGrainedToken } from './github.mjs';
+import { GitHubClient, GitHubError, OWNER, TRANSFER_TIMEOUT_MS, isFineGrainedToken } from './github.mjs';
 import { CredentialVault, CredentialVaultError } from './credential-vault.mjs';
 
 export class OwnerAccessError extends Error {
@@ -45,7 +45,7 @@ export class OwnerClient {
   #generation = 0;
 
   constructor({ fetchImpl = globalThis.fetch, storage, cryptoImpl, vault,
-    timeoutMs = 35000, uploadTimeoutMs = 90000, lifecycleTarget = globalThis.window } = {}) {
+    timeoutMs = 35000, uploadTimeoutMs = TRANSFER_TIMEOUT_MS, lifecycleTarget = globalThis.window } = {}) {
     this.#fetch = fetchImpl;
     this.#options = { timeoutMs, uploadTimeoutMs };
     this.#public = new GitHubClient('', fetchImpl, this.#options);

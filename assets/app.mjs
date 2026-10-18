@@ -1,4 +1,4 @@
-import { MAX_IMPORT_BYTES, parseCatalog, validateCatalog, mergeCatalog } from './catalog.mjs';
+import { MAX_IMPORT_BYTES, MAX_CATALOG_BYTES, measureCatalogBytes, parseCatalog, validateCatalog, mergeCatalog } from './catalog.mjs';
 import { REPOSITORY_URL, runUrl, describeRun } from './github.mjs';
 import { OwnerClient } from './owner-client.mjs';
 import { VAULT_STORAGE_KEY } from './credential-vault.mjs';
@@ -153,7 +153,7 @@ function renderSelection() {
   $('selection-count').textContent = theme ? `Theme ${themeIndex + 1} / ${catalog.length} · Variation ${variation ? variationIndex + 1 : 0} / ${theme.variations.length}` : 'No themes yet';
   for (const id of ['prev-theme', 'next-theme', 'copy-theme', 'copy-theme-name', 'theme-select']) $(id).disabled = !theme;
   for (const id of ['prev-variation', 'next-variation', 'copy-variation', 'copy-prompt', 'variation-select']) $(id).disabled = !variation;
-  shortcuts.reset();
+  shortcuts.resetCopyGesture();
   saveSelection();
 }
 
@@ -255,6 +255,8 @@ function setInputMode(mode) {
 }
 
 function renderValidation(result, incoming) {
+  const catalogBytes = measureCatalogBytes(result.catalog, { pretty: true, maximum: MAX_CATALOG_BYTES });
+  if (catalogBytes > MAX_CATALOG_BYTES) throw new Error('The updated collection would exceed 100 MB. GitHub requires the complete data.json to stay within this size.');
   const title = element('p', 'validation-summary', result.changed ? 'Valid JSON · ready to append' : 'Valid JSON · these entries are already in the collection');
   const counts = element('dl', 'validation-counts');
   const fileDuplicates = inputMode === 'file' ? fileBatch?.duplicateVariationsAcrossFiles ?? 0 : 0;
@@ -264,7 +266,7 @@ function renderValidation(result, incoming) {
     counts.append(group);
   }
   const fileNote = inputMode === 'file' && fileBatch ? `${fileBatch.files.length} file${fileBatch.files.length === 1 ? '' : 's'} combined in the order shown. ` : '';
-  const note = element('p', 'validation-note', `${fileNote}${incoming.length} theme${incoming.length === 1 ? '' : 's'} in this batch. GitHub checks the latest collection again before saving. Existing prompts keep their order and wording.`);
+  const note = element('p', 'validation-note', `${fileNote}${incoming.length} theme${incoming.length === 1 ? '' : 's'} in this batch. Collection after import: ${formatBytes(catalogBytes)} / 100 MB. GitHub checks the latest collection again before saving. Existing prompts keep their order and wording.`);
   $('validation-output').replaceChildren(title, counts, note);
 }
 
@@ -287,7 +289,8 @@ function validateInput() {
 }
 
 function formatBytes(bytes) {
-  return `${(bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KiB`;
+  const megabytes = bytes >= 1_000_000;
+  return `${(bytes / (megabytes ? 1_000_000 : 1000)).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${megabytes ? 'MB' : 'kB'}`;
 }
 
 function renderFiles(files) {
@@ -313,15 +316,22 @@ async function acceptFiles(files) {
     const ordered = sortFiles(files);
     renderFiles(ordered);
     if (ordered.some(file => !/\.json$/i.test(file.name))) throw new Error('Choose files with the .json extension.');
-    if (ordered.reduce((total, file) => total + file.size, 0) > MAX_IMPORT_BYTES) throw new Error('The selected files together exceed 5 MiB. Select fewer files or split the batch.');
+    if (ordered.reduce((total, file) => total + file.size, 0) > MAX_IMPORT_BYTES) throw new Error('The selected files together exceed 100 MB. Select fewer files or split the batch.');
     $('validation-output').replaceChildren(element('p', 'validation-note', 'Reading and checking every file…'));
-    const contents = await Promise.all(ordered.map(async file => {
+    const contents = [];
+    for (let index = 0; index < ordered.length; index += 1) {
+      if (readVersion !== fileReadVersion) return;
+      const file = ordered[index];
+      if (inputMode === 'file') $('validation-output').replaceChildren(element('p', 'validation-note', `Reading file ${index + 1} of ${ordered.length}: ${file.name}`));
       try {
         const bytes = await file.arrayBuffer();
         // Reject damaged encodings instead of silently replacing prompt characters.
-        return { name: file.name, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) };
+        contents.push({ name: file.name, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) });
       } catch { throw new Error(`File ${JSON.stringify(file.name)} could not be read as UTF-8. Save it as UTF-8 JSON and try again.`); }
-    }));
+    }
+    if (readVersion !== fileReadVersion) return;
+    if (inputMode === 'file') $('validation-output').replaceChildren(element('p', 'validation-note', 'Checking and combining the files in filename order…'));
+    await new Promise(resolve => setTimeout(resolve, 0));
     if (readVersion !== fileReadVersion) return;
     fileBatch = buildFileBatch(contents);
     fileText = fileBatch.source;
@@ -780,6 +790,10 @@ $('copy-theme-name').addEventListener('click', () => copyTheme(false));
 $('copy-variation').addEventListener('click', () => copyValue(catalog[themeIndex]?.variations[variationIndex]?.name, 'Variation name'));
 $('copy-prompt').addEventListener('click', copyPrompt);
 document.addEventListener('keydown', event => shortcuts.handle(event));
+document.addEventListener('keyup', event => shortcuts.release(event));
+document.addEventListener('focusin', () => shortcuts.reset());
+document.addEventListener('pointerdown', () => shortcuts.reset());
+document.addEventListener('compositionstart', () => shortcuts.reset());
 window.addEventListener('blur', () => shortcuts.reset());
 all('[data-input-mode]').forEach(button => {
   button.addEventListener('click', () => setInputMode(button.dataset.inputMode));
@@ -825,7 +839,7 @@ $('refresh-activity').addEventListener('click', async () => {
   finally { polling = false; $('refresh-activity').disabled = false; schedulePoll(); }
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTimeout(pollTimer);
+  if (document.hidden) { shortcuts.reset(); clearTimeout(pollTimer); }
   else {
     schedulePoll(1000);
   }
@@ -833,7 +847,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('hashchange', () => setView(location.hash.slice(1)));
 window.addEventListener('pagehide', () => {
-  accessGeneration += 1; client.disconnect(); clearAccessInputs(); clearTimeout(pollTimer);
+  shortcuts.reset(); accessGeneration += 1; client.disconnect(); clearAccessInputs(); clearTimeout(pollTimer);
 });
 window.addEventListener('pageshow', event => {
   if (event.persisted) { accessBusy = false; void initializeOwnerAccess('Log in again to submit updates.'); }

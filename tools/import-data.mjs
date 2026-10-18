@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, appendFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, rename, mkdir, unlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { CatalogError, MAX_IMPORT_BYTES, parseCatalog, validateCatalog, mergeCatalog } from '../assets/catalog.mjs';
+import {
+  CatalogError, MAX_IMPORT_BYTES, MAX_CATALOG_BYTES, importByteLimit,
+  parseCatalog, validateCatalog, mergeCatalog, measureCatalogBytes,
+} from '../assets/catalog.mjs';
 
 export const REPOSITORY = 'budhi-halim/seo-yuna';
 export const API_VERSION = '2026-03-10';
-export const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
+export { MAX_CATALOG_BYTES } from '../assets/catalog.mjs';
 export const MAX_COMMIT_ATTEMPTS = 4;
 const API_ROOT = 'https://api.github.com/repos/' + REPOSITORY;
 const META_LIMIT = 2 * 1024 * 1024;
@@ -60,7 +63,7 @@ function utf8(bytes) {
 
 function parseStoredCatalog(bytes) {
   if (bytes.byteLength > MAX_CATALOG_BYTES) {
-    throw new ImportError('The complete catalog exceeds the 16 MiB limit.', 'catalog_too_large');
+    throw new ImportError('The complete catalog exceeds GitHub\'s 100 MB file limit.', 'catalog_too_large');
   }
   let catalog;
   try {
@@ -131,7 +134,7 @@ export class GitHubClient {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(raw || method === 'PUT' ? 300_000 : 30_000),
       });
     } catch {
       throw new ImportError('The GitHub API request failed because of a network error or timeout.', 'network_error');
@@ -175,7 +178,7 @@ export class GitHubClient {
       throw new ImportError('GitHub returned invalid metadata for data.json.', 'invalid_api_response');
     }
     if (metadata.size > MAX_CATALOG_BYTES) {
-      throw new ImportError('The complete catalog exceeds the 16 MiB limit.', 'catalog_too_large');
+      throw new ImportError('The complete catalog exceeds GitHub\'s 100 MB file limit.', 'catalog_too_large');
     }
     const blobSha = requireSha(metadata.sha, 'Catalog blob SHA');
     // Blob retrieval also supports files above the Contents API inline-content limit.
@@ -189,7 +192,7 @@ export class GitHubClient {
   async update(bytes, blobSha) {
     requireSha(blobSha, 'Previous catalog blob SHA');
     if (bytes.byteLength > MAX_CATALOG_BYTES) {
-      throw new ImportError('The complete catalog would exceed the 16 MiB limit.', 'catalog_too_large');
+      throw new ImportError('The complete catalog would exceed GitHub\'s 100 MB file limit.', 'catalog_too_large');
     }
     const result = await this.request('/contents/data.json', {
       method: 'PUT',
@@ -264,7 +267,7 @@ function payloadPath(request, env) {
 
 function verifyPayload(bytes, request) {
   if (bytes.byteLength > MAX_IMPORT_BYTES) {
-    throw new ImportError('The JSON upload exceeds the 5 MiB limit.', 'import_too_large');
+    throw new ImportError('The JSON upload exceeds GitHub\'s 100 MB file limit.', 'import_too_large');
   }
   if (sha256Hex(bytes) !== request.sha256 || gitBlobSha(bytes) !== request.blobSha) {
     throw new ImportError('The upload checksum does not match the submitted file.', 'checksum_mismatch');
@@ -311,9 +314,10 @@ async function atomicCatalogWrite(directory, bytes) {
  */
 export async function mergeRemoteCatalog({
   incoming, client, directory = PROJECT_ROOT, log = console.log,
-  sleep = delay, maximumAttempts = MAX_COMMIT_ATTEMPTS,
+  sleep = delay, maximumAttempts = MAX_COMMIT_ATTEMPTS, maximumCatalogBytes = MAX_CATALOG_BYTES,
 }) {
   validateCatalog(incoming);
+  const maximum = importByteLimit(maximumCatalogBytes);
   if (!Number.isInteger(maximumAttempts) || maximumAttempts < 1 || maximumAttempts > 10) {
     throw new ImportError('The commit retry limit is invalid.', 'invalid_retry_limit');
   }
@@ -326,10 +330,10 @@ export async function mergeRemoteCatalog({
       log('[Merge] No changes needed; ' + result.duplicateVariations + ' identical prompts already exist.');
       return { ...result, commitSha: snapshot.commitSha, attempts: attempt };
     }
-    const bytes = Buffer.from(JSON.stringify(result.catalog, null, 2) + '\n', 'utf8');
-    if (bytes.byteLength > MAX_CATALOG_BYTES) {
-      throw new ImportError('The complete catalog would exceed the 16 MiB limit.', 'catalog_too_large');
+    if (measureCatalogBytes(result.catalog, { pretty: true, maximum }) > maximum) {
+      throw new ImportError('The complete catalog would exceed the ' + maximum.toLocaleString('en-US') + ' UTF-8 byte budget (100 MB GitHub maximum).', 'catalog_too_large');
     }
+    const bytes = Buffer.from(JSON.stringify(result.catalog, null, 2) + '\n', 'utf8');
     let commitSha;
     try {
       commitSha = await client.update(bytes, snapshot.blobSha);
@@ -356,7 +360,7 @@ export async function runValidation({ env = process.env, fetchImpl = globalThis.
     await actionOutputs({ import_requested: false }, env);
     return request;
   }
-  log('[Validation] Downloading and verifying the JSON batch (5 MiB maximum).');
+  log('[Validation] Downloading and verifying the JSON batch (100 MB GitHub file maximum).');
   const client = new GitHubClient({ token: env.GITHUB_TOKEN, fetchImpl });
   const bytes = await client.blob(request.blobSha, MAX_IMPORT_BYTES);
   const incoming = verifyPayload(bytes, request);
@@ -381,8 +385,13 @@ export async function runMerge({
   }
   let bytes;
   try {
-    bytes = await readFile(payloadPath(request, env));
-  } catch {
+    const filename = payloadPath(request, env);
+    if ((await stat(filename)).size > MAX_IMPORT_BYTES) {
+      throw new ImportError('The JSON upload exceeds GitHub\'s 100 MB file limit.', 'import_too_large');
+    }
+    bytes = await readFile(filename);
+  } catch (error) {
+    if (error instanceof ImportError) throw error;
     throw new ImportError('The validated upload is unavailable. Re-run validation before merging.', 'missing_payload');
   }
   const incoming = verifyPayload(bytes, request);

@@ -48,11 +48,13 @@ Searching does not change the displayed prompt or copy target. Choose a matching
 
 | Key | Action |
 | --- | --- |
-| **A** / **D** | Previous / next theme, wrapping at both ends |
-| **W** / **S** | Previous / next variation in the current theme, wrapping at both ends |
+| **A** / **D** | Previous / next theme; hold to repeat, wrapping at both ends |
+| **W** / **S** | Previous / next variation; hold to repeat, wrapping at both ends |
 | **Q** | Copy the theme title with its number, such as `1. Theme name` |
 | **Q, Q** within 350 ms | Copy only the theme name |
 | **E** | Copy the complete prompt |
+
+Hold A, D, W, or S to travel continuously, using the operating system’s keyboard repeat delay and speed. Releasing the key stops movement immediately. Leaving the reader, changing focus, or hiding the page interrupts a hold; press again to resume.
 
 The first Q writes to the clipboard immediately. A quick second Q replaces it with the unnumbered name. Holding a key does not count as a double press. Shortcuts are active only in Prompts, outside inputs, dropdowns, editable fields, and dialogs. Normal typing and browser shortcuts with Ctrl, Command, or Alt remain available. The variation name has a copy button and no hotkey.
 
@@ -89,7 +91,11 @@ Submit a JSON array of theme objects, using the established schema:
 
 Paste the JSON itself, without Markdown code fences. Each theme has exactly `id`, `name`, and `variations`; each variation has exactly `id`, `name`, and `prompt`. IDs use lowercase letters, digits, and hyphens, up to 160 characters. Names must be nonempty and at most 240 characters. Prompts must be nonempty and at most 40,000 characters. Variation IDs are unique across the entire collection.
 
-Each import is limited to **5 MiB of UTF-8 JSON in total**. For multiple files, both their combined original byte size and the serialized combined payload must fit this limit. Each file is parsed separately, must contain at least one theme with a variation, and must have a unique filename. Files with the same natural numeric sort value use the original filename as a deterministic tie-break. JSON files must use valid UTF-8; damaged encodings are rejected instead of silently changing prompt characters. All files are combined into one batch and submitted together, so a conflict in the last file prevents the whole import. The complete stored catalog is limited to **16 MiB**. These are application limits. Older themes with four variations remain valid; the importer does not impose a fixed variation count. The app requires at least one variation in a submitted batch.
+There is **no application cap on the number of files or themes**. A batch can contain hundreds of themes. Both an import and the complete stored `data.json` may use up to **100,000,000 UTF-8 bytes (100 MB)**. This replaces the earlier 5 MiB import and 16 MiB catalog caps. The boundary follows [GitHub’s Contents API support up to 100 MB](https://docs.github.com/en/rest/repos/contents#get-repository-content) and stays below [GitHub’s 100 MiB Git file limit](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github). One canonical GitHub file cannot grow literally without limit. The preview shows the resulting catalog size and rejects a batch that would cross this boundary before uploading it.
+
+For multiple files, both their combined original byte size and the serialized combined payload must fit the import budget. Each file is parsed separately, must contain at least one theme with a variation, and must have a unique filename. Files with the same natural numeric sort value use the original filename as a deterministic tie-break. JSON files must use valid UTF-8; damaged encodings are rejected instead of silently changing prompt characters. Files are read in sequence with visible progress, then merged through shared indexes without repeatedly rebuilding the growing batch. All files are submitted together, so a conflict in the last file prevents the whole import.
+
+Large batches use more browser memory and take longer to read, validate, and upload. The GitHub upload and catalog download have a 15-minute network timeout so a slow transfer does not inherit the short status-request timeout. Keep the page open until acceptance is confirmed. Older themes with four variations remain valid; the importer does not impose a fixed variation count. The app requires at least one variation in a submitted batch.
 
 The creative directions are in [rulebook.txt](rulebook.txt). Validation checks data structure and conflicts; it does not judge prompt quality or automatically rewrite prompts.
 
@@ -159,7 +165,7 @@ node tools/build-site.mjs
 
 Serve _site with a local static HTTP server for development. Production imports always target the fixed GitHub repository. Automated tests use synthetic credentials and mocked GitHub requests; never put a real token in a test fixture.
 
-For optional browser integration checks, install Playwright and Chromium in your development environment, then run `node tests/browser-check.mjs`. Set `SEO_YUNA_CHROMIUM` to an alternate Chromium executable if needed. The script starts a local server and fresh browser profiles, mocks GitHub, blocks other external requests, and makes no live writes. It checks the public reader, local setup and login, cancellation, draft preservation, submission handoff, recovery, and the mobile dialog. Screenshots are written outside the repository; `SEO_YUNA_QA_DIR` can change their destination. The application and unit-test gate remain dependency-free.
+For optional browser integration checks, install Playwright and Chromium in your development environment, then run `node tests/browser-check.mjs`. Set `SEO_YUNA_CHROMIUM` to an alternate Chromium executable if needed. The script starts a local server and fresh browser profiles, mocks GitHub, blocks other external requests, and makes no live writes. It checks the public reader, held navigation and copy gestures, local setup and login, cancellation, draft preservation, a 300-theme import above the retired size limits, submission handoff, recovery, and the mobile dialog. Screenshots are written outside the repository; `SEO_YUNA_QA_DIR` can change their destination. The application and unit-test gate remain dependency-free.
 
 | File | Purpose |
 | --- | --- |

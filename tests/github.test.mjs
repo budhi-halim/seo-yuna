@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { MAX_IMPORT_BYTES, MAX_CATALOG_BYTES } from '../assets/catalog.mjs';
 import { GitHubClient, GitHubError, API_VERSION, OWNER, OWNER_ID, REPOSITORY_ID, WORKFLOW_PATH,
   isFineGrainedToken, describeRun, runUrl } from '../assets/github.mjs';
 
@@ -305,13 +306,37 @@ test('untrusted identifiers and invalid uploads cause no network call', async ()
   await assert.rejects(client.findRun(receipt.requestId, 'not a date'), /Invalid/);
   await assert.rejects(client.findRun(receipt.requestId, '2026-10-18T00:00:00Z\n'), /Invalid/);
   await assert.rejects(client.stageBlob(''), /JSON text/);
-  await assert.rejects(client.stageBlob('あ'.repeat(2 * 1024 * 1024)), /5 MiB/);
+  await assert.rejects(client.stageBlob('あ'.repeat(Math.floor(MAX_IMPORT_BYTES / 3) + 1)), /100 MB/);
   assert.equal(calls.length, 0);
 });
 
-test('canonical catalog reads enforce the 16 MiB worker/build limit', async () => {
-  for (const response of [() => new Response('[]', { headers: { 'Content-Length': String(16 * 1024 * 1024 + 1) } }),
-    () => new Response(new Uint8Array(16 * 1024 * 1024 + 1))]) {
+test('uploads above 5 MiB and catalog reads above 16 MiB use the shared 100 MB budget', async () => {
+  const source = JSON.stringify(Array.from({ length: 150 }, (_, index) => ({
+    id: `large-theme-${index}`, name: `Large theme ${index}`, variations: [
+      { id: `large-prompt-${index}`, name: 'Variation', prompt: 'x'.repeat(40000) },
+    ],
+  })));
+  assert.ok(Buffer.byteLength(source) > 5 * 1024 * 1024);
+  const canonical = `[${Array(4).fill(source.slice(1, -1)).join(',')}]`;
+  assert.ok(Buffer.byteLength(canonical) > 16 * 1024 * 1024);
+  const { client, calls } = await connected(url => url.includes('/contents/data.json?') ? new Response(canonical) : undefined);
+  assert.equal(await client.stageBlob(source), receipt.blobSha);
+  assert.equal(JSON.parse(calls[0].init.body).content, source);
+  assert.equal(await client.readCanonical(), canonical);
+});
+
+test('canonical catalog reads reject declared and streamed content above 100 MB', async () => {
+  for (const response of [() => new Response('[]', { headers: { 'Content-Length': String(MAX_CATALOG_BYTES + 1) } }),
+    () => {
+      const chunk = new Uint8Array(65536);
+      let remaining = MAX_CATALOG_BYTES + 1;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (!remaining) { controller.close(); return; }
+        const length = Math.min(remaining, chunk.length);
+        controller.enqueue(chunk.subarray(0, length));
+        remaining -= length;
+      } }));
+    }]) {
     const { client } = fixture(url => url.includes('/contents/data.json?') ? response() : undefined);
     await assert.rejects(client.readCanonical(), error => error.status === 413 && !error.uncertain);
   }

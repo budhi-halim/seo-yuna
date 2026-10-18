@@ -330,6 +330,98 @@ try {
     await audit(s, { expectVault: false });
   });
 
+  await check('native-hold-navigation-and-copy-guards', async () => {
+    const s = await session(); const { page } = s;
+    await page.evaluate(() => {
+      window.__qaKeys = [];
+      document.addEventListener('keydown', event => {
+        window.__qaKeys.push({ key: event.key, repeat: event.repeat, prevented: event.defaultPrevented });
+      });
+      window.__qaCopies = [];
+      const write = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = value => {
+        window.__qaCopies.push(value);
+        return write(value);
+      };
+    });
+    const selectedTheme = () => page.locator('#theme-select').inputValue();
+    const selectedVariation = () => page.locator('#variation-select').inputValue();
+    const focusReader = () => page.locator('.prompt-reading-area').focus();
+    const hold = async (key, strokes) => {
+      for (let index = 0; index < strokes; index++) await page.keyboard.down(key);
+      await page.keyboard.up(key);
+    };
+    await page.locator('#theme-select').selectOption(catalog[0].id);
+    await focusReader();
+    await hold('d', catalog.length + 3);
+    assert.equal(await selectedTheme(), catalog[3].id, 'Held D must continue through a complete theme loop');
+    const observed = await page.evaluate(() => window.__qaKeys.splice(0));
+    assert.equal(observed[0].repeat, false);
+    assert.equal(observed.slice(1).every(event => event.key === 'd' && event.repeat && event.prevented), true,
+      'Repeated keyboard.down calls must produce real repeat events handled by the app');
+    await hold('a', catalog.length + 4);
+    assert.equal(await selectedTheme(), catalog.at(-1).id, 'Held A must wrap backwards through the first theme');
+    const variations = catalog.at(-1).variations;
+    await hold('w', variations.length + 1);
+    assert.equal(await selectedVariation(), variations.at(-1).id, 'Held W must wrap backwards through variations');
+    await hold('s', variations.length + 1);
+    assert.equal(await selectedVariation(), variations[0].id, 'Held S must wrap forward through variations');
+    const stopped = await page.locator('#selection-count').textContent();
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('#selection-count').textContent(), stopped, 'No movement may continue after keyup');
+
+    await page.keyboard.down('d');
+    assert.equal(await selectedTheme(), catalog[0].id);
+    await page.locator('#theme-search').focus();
+    await page.keyboard.down('d'); // Still physically held: this repeat belongs to the input.
+    assert.equal(await page.locator('#theme-search').inputValue(), 'd');
+    assert.equal(await selectedTheme(), catalog[0].id, 'A repeated letter in search must type without navigating');
+    await focusReader();
+    await page.keyboard.down('d');
+    assert.equal(await selectedTheme(), catalog[0].id, 'Returning from an input must require a fresh navigation press');
+    await page.keyboard.up('d');
+    await page.locator('#theme-search').fill('');
+    await page.keyboard.type('adwsqe');
+    assert.equal(await page.locator('#theme-search').inputValue(), 'adwsqe');
+    assert.equal(await selectedTheme(), catalog[0].id, 'All shortcut letters must remain ordinary search input');
+    await page.locator('#theme-search').fill('');
+
+    await focusReader();
+    await page.keyboard.down('d');
+    assert.equal(await selectedTheme(), catalog[1].id);
+    await page.locator('#open-shortcuts').click();
+    await page.keyboard.down('d');
+    assert.equal(await selectedTheme(), catalog[1].id, 'An open dialog must interrupt held navigation');
+    await page.locator('#close-shortcuts').click();
+    await focusReader();
+    await page.keyboard.down('d');
+    assert.equal(await selectedTheme(), catalog[1].id, 'Closing the dialog must not revive an interrupted hold');
+    await page.keyboard.up('d');
+    await page.keyboard.press('d');
+    assert.equal(await selectedTheme(), catalog[2].id);
+
+    await page.keyboard.down('a');
+    assert.equal(await selectedTheme(), catalog[1].id);
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.keyboard.down('a');
+    assert.equal(await selectedTheme(), catalog[1].id, 'Window blur must invalidate a held navigation key');
+    await page.keyboard.up('a');
+
+    await page.keyboard.press('Escape');
+    await hold('q', 9);
+    assert.deepEqual(await page.evaluate(() => window.__qaCopies), [`2. ${catalog[1].name}`],
+      'Holding Q must copy the numbered theme once');
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('q'); await page.keyboard.press('q');
+    assert.deepEqual(await page.evaluate(() => window.__qaCopies.slice(-2)), [`2. ${catalog[1].name}`, catalog[1].name]);
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), catalog[1].name);
+    const copiesBeforeE = await page.evaluate(() => window.__qaCopies.length);
+    await hold('e', 9);
+    assert.equal(await page.evaluate(() => window.__qaCopies.length), copiesBeforeE + 1, 'Holding E must copy the prompt once');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), catalog[1].variations[0].prompt);
+    await audit(s, { expectVault: false });
+  });
+
   await check('file-draft-and-accepted-import', async () => {
     const s = await session(); const { page, mock } = s;
     await page.locator('#tab-import').click(); await page.locator('#mode-file').click();
@@ -362,6 +454,61 @@ try {
     assert.equal(await page.locator('#submit-button').isDisabled(), true, 'Accepted input cannot be immediately submitted a second time');
     assert.equal(mock.requests.filter(call => call.pathname.endsWith('/dispatches')).length, 1);
     await audit(s); await screenshot(page, 'desktop-accepted-import.png');
+  });
+
+  await check('three-hundred-theme-large-file-batch', async () => {
+    const s = await session(); const { page, mock } = s;
+    const syntheticPrompt = 'Browser QA synthetic prompt text, used only for import capacity verification. '.repeat(100);
+    const largeThemes = Array.from({ length: 300 }, (_, index) => {
+      const number = index + 1;
+      return { id: `qa-browser-theme-large-${number}`, name: `Capacity verification theme ${number}`,
+        variations: Array.from({ length: 8 }, (_, variation) => ({
+          id: `qa-browser-variation-large-${number}-${variation + 1}`,
+          name: `Capacity verification variation ${variation + 1}`,
+          prompt: syntheticPrompt,
+        })) };
+    });
+    const files = largeThemes.map((theme, index) => ({
+      name: `${index + 1}-capacity-fixture.json`, mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify([theme])),
+    })).reverse();
+    const sourceBytes = files.reduce((bytes, file) => bytes + file.buffer.length, 0);
+    assert.ok(sourceBytes > 16 * 1024 * 1024, 'The fixture must exceed both retired 5 MiB and 16 MiB limits');
+    assert.ok(sourceBytes < 100_000_000);
+    await configure(page); await page.locator('#close-connect').click();
+    await page.locator('#tab-import').click(); await page.locator('#mode-file').click();
+    await page.locator('#json-file').setInputFiles(files);
+    await page.waitForFunction(() => document.querySelectorAll('#file-list li').length === 300 &&
+      !document.querySelector('#validate-button')?.disabled, undefined, { timeout: 30000 });
+    const filenames = await page.locator('#file-list li').allTextContents();
+    assert.ok(filenames[0].includes('1-capacity-fixture.json'));
+    assert.ok(filenames[1].includes('2-capacity-fixture.json'));
+    assert.ok(filenames.at(-1).includes('300-capacity-fixture.json'));
+    await page.locator('#validate-button').click();
+    await page.waitForFunction(() => !document.querySelector('#submit-button')?.disabled, undefined, { timeout: 30000 });
+    const preview = await page.locator('#validation-output').textContent();
+    assert.match(preview, /300/);
+    assert.match(preview, /2[,.]?400/);
+    assert.match(preview, /ready to append/i);
+    const blob = mock.hold('POST', `${repoPath}/git/blobs`);
+    const dispatch = mock.hold('POST', `${workflowPath}/dispatches`);
+    await page.locator('#submit-button').click(); await bounded(blob.entered, 'large blob staging');
+    assert.equal(await page.locator('#safe-to-close').getAttribute('data-safe'), 'false');
+    blob.release(); await bounded(dispatch.entered, 'large import dispatch');
+    assert.equal(await page.locator('#safe-to-close').getAttribute('data-safe'), 'false');
+    const staged = [...mock.blobs.values()][0];
+    assert.ok(Buffer.byteLength(staged) > 16 * 1024 * 1024);
+    const uploaded = JSON.parse(staged);
+    assert.equal(uploaded.length, 300);
+    assert.equal(uploaded.reduce((count, theme) => count + theme.variations.length, 0), 2400);
+    assert.deepEqual(uploaded.map(theme => theme.id), largeThemes.map(theme => theme.id), 'The large payload must preserve natural filename order');
+    dispatch.release(); await bounded(dispatch.finished, 'large import acceptance');
+    await page.waitForFunction(() => document.querySelector('#safe-to-close')?.dataset.safe === 'true');
+    assert.match(await page.locator('#submission-title').textContent(), /Accepted/);
+    assert.equal(mock.requests.filter(call => call.pathname.endsWith('/dispatches')).length, 1);
+    assert.equal(mock.runs[0].status, 'queued', 'Safe to close must not require the queued Action to finish');
+    await audit(s);
+    console.log(`Large import fixture: ${uploaded.length} themes, 2400 prompts, 300 files, ${sourceBytes.toLocaleString('en-US')} UTF-8 bytes.`);
   });
 
   await check('cancel-verification-before-save', async () => {

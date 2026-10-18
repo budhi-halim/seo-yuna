@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  CatalogError, MAX_IMPORT_BYTES, parseCatalog, validateCatalog, mergeCatalog,
+  CatalogError, MAX_IMPORT_BYTES, MAX_CATALOG_BYTES, parseCatalog, validateCatalog, mergeCatalog,
+  utf8ByteLength, measureCatalogBytes,
 } from '../assets/catalog.mjs';
 
 function variation(id = 'first-prompt', name = 'First prompt', prompt = 'Original prompt.\nKeep all spacing.  ') {
@@ -41,11 +42,39 @@ test('empty arrays are valid and identical content produces a no-op', () => {
   assert.equal(validateCatalog([theme('empty-theme', 'An empty theme', [])]).length, 1);
 });
 
-test('the 5 MiB upload cap measures UTF-8 bytes before JSON parsing', () => {
-  assert.throws(() => parseCatalog(' '.repeat(MAX_IMPORT_BYTES + 1)), { code: 'import_too_large' });
-  assert.throws(() => parseCatalog('🌷'.repeat(Math.floor(MAX_IMPORT_BYTES / 4) + 1)), { code: 'import_too_large' });
+test('the shared GitHub boundary is 100 decimal MB and smaller test budgets count UTF-8 before parsing', () => {
+  assert.equal(MAX_IMPORT_BYTES, 100_000_000);
+  assert.equal(MAX_CATALOG_BYTES, MAX_IMPORT_BYTES);
+  const maximumBytes = 64;
+  assert.deepEqual(parseCatalog('[]' + ' '.repeat(maximumBytes - 2), { maximumBytes }), []);
+  assert.throws(() => parseCatalog(' '.repeat(maximumBytes + 1), { maximumBytes }), { code: 'import_too_large' });
+  assert.throws(() => parseCatalog('🌷'.repeat(Math.floor(maximumBytes / 4) + 1), { maximumBytes }), { code: 'import_too_large' });
+  assert.throws(() => parseCatalog('[]', { maximumBytes: MAX_IMPORT_BYTES + 1 }), RangeError);
   assert.throws(() => parseCatalog('{secret-looking malformed text'), (error) =>
     error instanceof CatalogError && error.code === 'invalid_json' && !error.message.includes('secret-looking'));
+});
+
+test('allocation-free byte measurement agrees with UTF-8 and exact compact/pretty JSON', () => {
+  const encoder = new TextEncoder();
+  const samples = ['', 'ASCII', 'é東京 🌷', '\u0000\b\f\n\r\t"\\', '\ud800', '\udfff', '\ud800\ud800\udc00', '\u2028\u2029'];
+  for (const text of samples) {
+    const length = encoder.encode(text).byteLength;
+    assert.equal(utf8ByteLength(text), length);
+    if (length) assert.ok(utf8ByteLength(text, length - 1) > length - 1);
+    const catalog = [theme('measurement', 'Theme ' + text, [variation('sample', 'Name ' + text, 'Prompt ' + text)])];
+    for (const pretty of [false, true]) {
+      const source = pretty ? JSON.stringify(catalog, null, 2) + '\n' : JSON.stringify(catalog);
+      const size = encoder.encode(source).byteLength;
+      assert.equal(measureCatalogBytes(catalog, { pretty }), size);
+      assert.equal(measureCatalogBytes(catalog, { pretty, maximum: size }), size);
+      assert.ok(measureCatalogBytes(catalog, { pretty, maximum: size - 1 }) > size - 1);
+      assert.ok(measureCatalogBytes(catalog, { pretty, maximum: 10 }) > 10);
+    }
+  }
+  for (const catalog of [[], [theme('empty', 'Empty', [])], [theme(), theme('second', 'Second', [variation('second-prompt')])]]) {
+    assert.equal(measureCatalogBytes(catalog), encoder.encode(JSON.stringify(catalog)).byteLength);
+    assert.equal(measureCatalogBytes(catalog, { pretty: true }), encoder.encode(JSON.stringify(catalog, null, 2) + '\n').byteLength);
+  }
 });
 
 test('strict shape, exact fields, slugs and text limits are enforced', async (t) => {

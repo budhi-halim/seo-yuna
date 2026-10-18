@@ -1,5 +1,8 @@
 /** The shared, dependency-free catalog contract for the browser and the importer. */
-export const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+// GitHub's Contents API supports files up to 100 MB. Use decimal bytes so this
+// boundary also stays below GitHub's 100 MiB repository-file ceiling.
+export const MAX_IMPORT_BYTES = 100_000_000;
+export const MAX_CATALOG_BYTES = MAX_IMPORT_BYTES;
 export const MAX_ID_LENGTH = 160;
 export const MAX_NAME_LENGTH = 240;
 export const MAX_PROMPT_LENGTH = 40_000;
@@ -19,6 +22,82 @@ export class CatalogError extends Error {
 
 function reject(message, path, code = 'invalid_catalog') {
   throw new CatalogError(message, { code, path });
+}
+
+/** Count UTF-8 without allocating another copy; stop after maximum is exceeded. */
+export function utf8ByteLength(text, maximum = Infinity) {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff
+      && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3; // TextEncoder replaces each unpaired surrogate with U+FFFD.
+    if (bytes > maximum) return bytes;
+  }
+  return bytes;
+}
+
+/** A caller may impose a smaller budget, but cannot bypass the provider limit. */
+export function importByteLimit(maximumBytes = MAX_IMPORT_BYTES) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > MAX_IMPORT_BYTES) {
+    throw new RangeError('The JSON byte budget must be between 1 and 100,000,000 bytes.');
+  }
+  return maximumBytes;
+}
+
+function jsonStringBytes(text, maximum) {
+  let bytes = 2; // The opening and closing quotes.
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code === 0x22 || code === 0x5c || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) bytes += 2;
+    else if (code < 0x20) bytes += 6;
+    else if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff
+      && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4;
+      index += 1;
+    } else if (code >= 0xd800 && code <= 0xdfff) bytes += 6;
+    else bytes += 3;
+    if (bytes > maximum) return bytes;
+  }
+  return bytes;
+}
+
+/**
+ * Measure a validated catalog before allocating its serialized representation.
+ * Compact mode matches JSON.stringify(catalog). Pretty mode matches the stored
+ * JSON.stringify(catalog, null, 2) + '\n', including its final newline.
+ * A bounded measurement can return early once the maximum is exceeded.
+ */
+export function measureCatalogBytes(catalog, { pretty = false, maximum = Infinity } = {}) {
+  let bytes = pretty ? 1 : 0;
+  function visit(value, depth) {
+    if (typeof value === 'string') {
+      bytes += jsonStringBytes(value, maximum - bytes);
+      return;
+    }
+    const array = Array.isArray(value);
+    const entries = array ? value : Object.keys(value);
+    bytes += 2; // The brackets or braces.
+    for (let index = 0; index < entries.length && bytes <= maximum; index += 1) {
+      if (index) bytes += 1;
+      if (pretty) bytes += 1 + (depth + 1) * 2;
+      if (array) visit(entries[index], depth + 1);
+      else {
+        const key = entries[index];
+        bytes += jsonStringBytes(key, maximum - bytes) + (pretty ? 2 : 1);
+        if (bytes <= maximum) visit(value[key], depth + 1);
+      }
+    }
+    if (pretty && entries.length) bytes += 1 + depth * 2;
+  }
+  visit(catalog, 0);
+  return bytes;
 }
 
 function record(value, keys, path) {
@@ -94,10 +173,11 @@ export function validateCatalog(value) {
 }
 
 /** Parse an upload, with the application limit measured in UTF-8 bytes. */
-export function parseCatalog(text) {
+export function parseCatalog(text, { maximumBytes = MAX_IMPORT_BYTES } = {}) {
+  const maximum = importByteLimit(maximumBytes);
   if (typeof text !== 'string') reject('The JSON upload must be text.', 'catalog', 'invalid_json');
-  if (new TextEncoder().encode(text).byteLength > MAX_IMPORT_BYTES) {
-    reject('The JSON upload exceeds the 5 MiB limit.', 'catalog', 'import_too_large');
+  if (text.length > maximum || utf8ByteLength(text, maximum) > maximum) {
+    reject('The JSON upload exceeds the ' + maximum.toLocaleString('en-US') + ' UTF-8 byte budget (100 MB GitHub maximum).', 'catalog', 'import_too_large');
   }
   let value;
   try {
@@ -121,8 +201,16 @@ function copyTheme(theme) {
  * An existing ID may be repeated only with exactly the same original content.
  */
 export function mergeCatalog(current, incoming) {
+  return mergeCatalogBatches(current, [incoming]);
+}
+
+/**
+ * Merge a stream of independently valid catalogs using one set of indexes.
+ * All copied state stays local until success; a failure never changes an input.
+ * Conflicts include batchIndex so file import can identify the offending file.
+ */
+export function mergeCatalogBatches(current, batches) {
   validateCatalog(current);
-  validateCatalog(incoming);
   const catalog = current.map(copyTheme);
   const themes = new Map(catalog.map((theme) => [theme.id, theme]));
   const variations = new Map();
@@ -134,50 +222,60 @@ export function mergeCatalog(current, incoming) {
   let addedThemes = 0;
   let addedVariations = 0;
   let duplicateVariations = 0;
-  let extendedThemes = 0;
+  const originalThemeIds = new Set(themes.keys());
+  const extendedThemeIds = new Set();
 
-  incoming.forEach((incomingTheme, themeIndex) => {
-    const themePath = 'catalog[' + themeIndex + ']';
-    let destination = themes.get(incomingTheme.id);
-    const existed = Boolean(destination);
-    if (destination && destination.name !== incomingTheme.name) {
-      reject('An existing theme ID has a different name. Existing themes cannot be overwritten.', themePath + '.name', 'theme_conflict');
-    }
-    if (!destination) {
-      destination = { id: incomingTheme.id, name: incomingTheme.name, variations: [] };
-      themes.set(destination.id, destination);
-      catalog.push(destination);
-      addedThemes += 1;
-    }
-    let additionsToTheme = 0;
-    incomingTheme.variations.forEach((incomingVariation, variationIndex) => {
-      const variationPath = themePath + '.variations[' + variationIndex + ']';
-      const existing = variations.get(incomingVariation.id);
-      if (existing) {
-        if (existing.themeId !== incomingTheme.id) {
-          reject('An existing variation ID belongs to a different theme.', variationPath + '.id', 'variation_theme_conflict');
+  let batchIndex = 0;
+  for (const incoming of batches) {
+    try {
+      validateCatalog(incoming);
+      incoming.forEach((incomingTheme, themeIndex) => {
+        const themePath = 'catalog[' + themeIndex + ']';
+        let destination = themes.get(incomingTheme.id);
+        if (destination && destination.name !== incomingTheme.name) {
+          reject('An existing theme ID has a different name. Existing themes cannot be overwritten.', themePath + '.name', 'theme_conflict');
         }
-        if (existing.variation.name !== incomingVariation.name || existing.variation.prompt !== incomingVariation.prompt) {
-          reject('An existing variation ID has different content. Existing variations cannot be overwritten.', variationPath, 'variation_conflict');
+        if (!destination) {
+          destination = { id: incomingTheme.id, name: incomingTheme.name, variations: [] };
+          themes.set(destination.id, destination);
+          catalog.push(destination);
+          addedThemes += 1;
         }
-        duplicateVariations += 1;
-        return;
-      }
-      const variation = copyVariation(incomingVariation);
-      destination.variations.push(variation);
-      variations.set(variation.id, { themeId: destination.id, variation });
-      addedVariations += 1;
-      additionsToTheme += 1;
-    });
-    if (existed && additionsToTheme > 0) extendedThemes += 1;
-  });
+        let additionsToTheme = 0;
+        incomingTheme.variations.forEach((incomingVariation, variationIndex) => {
+          const variationPath = themePath + '.variations[' + variationIndex + ']';
+          const existing = variations.get(incomingVariation.id);
+          if (existing) {
+            if (existing.themeId !== incomingTheme.id) {
+              reject('An existing variation ID belongs to a different theme.', variationPath + '.id', 'variation_theme_conflict');
+            }
+            if (existing.variation.name !== incomingVariation.name || existing.variation.prompt !== incomingVariation.prompt) {
+              reject('An existing variation ID has different content. Existing variations cannot be overwritten.', variationPath, 'variation_conflict');
+            }
+            duplicateVariations += 1;
+            return;
+          }
+          const variation = copyVariation(incomingVariation);
+          destination.variations.push(variation);
+          variations.set(variation.id, { themeId: destination.id, variation });
+          addedVariations += 1;
+          additionsToTheme += 1;
+        });
+        if (originalThemeIds.has(incomingTheme.id) && additionsToTheme > 0) extendedThemeIds.add(incomingTheme.id);
+      });
+    } catch (error) {
+      if (error instanceof CatalogError) error.batchIndex = batchIndex;
+      throw error;
+    }
+    batchIndex += 1;
+  }
 
   return {
     catalog,
     addedThemes,
     addedVariations,
     duplicateVariations,
-    extendedThemes,
+    extendedThemes: extendedThemeIds.size,
     changed: addedThemes > 0 || addedVariations > 0,
   };
 }

@@ -1,5 +1,11 @@
 const TYPING_TARGETS = 'input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]';
 const DOUBLE_Q_MS = 350;
+const NAVIGATION_KEYS = new Set(['a', 'd', 'w', 's']);
+const SHORTCUT_KEYS = new Set([...NAVIGATION_KEYS, 'q', 'e']);
+
+function eventKey(event) {
+  return typeof event.key === 'string' ? event.key.toLowerCase() : '';
+}
 
 /** Return a valid index after moving in a circular collection; empty lists use 0. */
 export function wrapIndex(index, delta, length) {
@@ -21,7 +27,12 @@ function isTypingTarget(target) {
  * Copy callbacks run synchronously inside handle(), retaining the keyboard
  * event's clipboard activation. The first Q copies the numbered title; a
  * second distinct Q within 350 ms replaces it with the unnumbered title.
- * Call reset() on window blur or when changing selections outside this handler.
+ * Navigation follows the operating system's key-repeat delay and speed. There
+ * are no movement timers: only keydown events can change the selection.
+ *
+ * Wire handle() to keydown and release() to keyup. Call reset() on blur, hidden
+ * page, focus/pointer changes, or opening a dialog. When re-rendering a selection,
+ * call resetCopyGesture() instead so the active navigation hold can continue.
  */
 export function createShortcutHandler({
   getContext,
@@ -32,9 +43,21 @@ export function createShortcutHandler({
   now = () => performance.now(),
 }) {
   let pendingQ = null;
+  const pressedKeys = new Set();
+
+  function resetCopyGesture() {
+    pendingQ = null;
+  }
 
   function reset() {
-    pendingQ = null;
+    resetCopyGesture();
+    pressedKeys.clear();
+  }
+
+  function release(event) {
+    // Always process release, even if focus moved to a field or dialog meanwhile.
+    // Do not prevent default or clear the Q gesture: the second Q needs keyup.
+    return pressedKeys.delete(eventKey(event));
   }
 
   function handle(event) {
@@ -43,7 +66,7 @@ export function createShortcutHandler({
       reset();
       return false;
     }
-    if (pendingQ && pendingQ.themeId !== context.themeId) reset();
+    if (pendingQ && pendingQ.themeId !== context.themeId) resetCopyGesture();
 
     const originalTarget = event.composedPath?.()[0];
     if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
@@ -51,11 +74,19 @@ export function createShortcutHandler({
       reset();
       return false;
     }
-    if (event.repeat) return false;
+    const key = eventKey(event);
+    if (key !== 'q') resetCopyGesture();
+    if (!SHORTCUT_KEYS.has(key)) return false;
 
-    const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
-    if (key !== 'q') reset();
-    if (!['a', 'd', 'w', 's', 'q', 'e'].includes(key)) return false;
+    if (event.repeat) {
+      // A hold that started in a field, another tab, or a disabled view must not
+      // begin navigating merely because focus returns to the prompt reader.
+      if (!NAVIGATION_KEYS.has(key) || !pressedKeys.has(key)) return false;
+    } else {
+      // Distinct copy strokes require a release; holding Q/E never spams writes.
+      if (pressedKeys.has(key)) return false;
+      pressedKeys.add(key);
+    }
 
     event.preventDefault();
     switch (key) {
@@ -75,8 +106,10 @@ export function createShortcutHandler({
         const timestamp = now();
         const elapsed = pendingQ ? timestamp - pendingQ.at : Infinity;
         const isDouble = elapsed >= 0 && elapsed <= DOUBLE_Q_MS;
-        pendingQ = isDouble ? null : { at: timestamp, themeId: context.themeId };
         onCopyTheme(!isDouble);
+        // The clipboard fallback briefly focuses a textarea. Preserve this Q
+        // gesture after that synchronous focus/reset sequence completes.
+        pendingQ = isDouble ? null : { at: timestamp, themeId: context.themeId };
         break;
       }
       case 'e':
@@ -86,5 +119,5 @@ export function createShortcutHandler({
     return true;
   }
 
-  return { handle, reset };
+  return { handle, release, reset, resetCopyGesture };
 }

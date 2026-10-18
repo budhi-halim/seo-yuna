@@ -159,15 +159,16 @@ test('filenames and prompt HTML, Unicode, whitespace, and shell-like text remain
 });
 
 test('the combined original-source limit includes BOM, whitespace, and duplicate files', () => {
+  const maximumBytes = 1024;
   const first = file('a.json');
   first.text = '\uFEFF' + first.text;
   const second = file('b.json');
-  second.text += ' '.repeat(MAX_IMPORT_BYTES - bytes(first.text) - bytes(second.text));
-  assert.ok(bytes(first.text) < MAX_IMPORT_BYTES && bytes(second.text) < MAX_IMPORT_BYTES);
-  const result = buildFileBatch([second, first]);
-  assert.equal(result.files.reduce((sum, item) => sum + item.bytes, 0), MAX_IMPORT_BYTES);
+  second.text += ' '.repeat(maximumBytes - bytes(first.text) - bytes(second.text));
+  assert.ok(bytes(first.text) < maximumBytes && bytes(second.text) < maximumBytes);
+  const result = buildFileBatch([second, first], { maximumBytes });
+  assert.equal(result.files.reduce((sum, item) => sum + item.bytes, 0), maximumBytes);
   assert.equal(result.duplicateVariationsAcrossFiles, 1);
-  assert.throws(() => buildFileBatch([first, { ...second, text: second.text + ' ' }]), error => {
+  assert.throws(() => buildFileBatch([first, { ...second, text: second.text + ' ' }], { maximumBytes }), error => {
     assert.equal(error.code, 'batch_too_large');
     assert.equal(error.filename, 'b.json');
     return true;
@@ -175,29 +176,49 @@ test('the combined original-source limit includes BOM, whitespace, and duplicate
 });
 
 test('individual source limits use parseCatalog and identify the oversized file', () => {
+  const maximumBytes = 1024;
   const oversized = file('oversized.json');
-  oversized.text += ' '.repeat(MAX_IMPORT_BYTES + 1 - bytes(oversized.text));
-  assert.throws(() => buildFileBatch([file('a.json'), oversized]), { code: 'import_too_large', filename: 'oversized.json' });
+  oversized.text += ' '.repeat(maximumBytes + 1 - bytes(oversized.text));
+  assert.throws(() => buildFileBatch([file('a.json'), oversized], { maximumBytes }), { code: 'import_too_large', filename: 'oversized.json' });
 });
 
 test('the combined limit counts multibyte UTF-8 even when JavaScript lengths would fit', () => {
-  const chunk = [theme('large', Array.from({ length: 25 }, (_, index) => variation(`large-${index}`, '東'.repeat(35_000))))];
+  const maximumBytes = 2048;
+  const chunk = [theme('large', [variation('large-one', '東'.repeat(350))])];
   const first = file('one.json', chunk);
   const second = file('two.json', chunk);
-  assert.ok(first.text.length + second.text.length < MAX_IMPORT_BYTES);
-  assert.ok(bytes(first.text) < MAX_IMPORT_BYTES);
-  assert.ok(bytes(first.text) + bytes(second.text) > MAX_IMPORT_BYTES);
-  assert.throws(() => buildFileBatch([second, first]), { code: 'batch_too_large', filename: 'two.json' });
+  assert.ok(first.text.length + second.text.length < maximumBytes);
+  assert.ok(bytes(first.text) < maximumBytes);
+  assert.ok(bytes(first.text) + bytes(second.text) > maximumBytes);
+  assert.throws(() => buildFileBatch([second, first], { maximumBytes }), { code: 'batch_too_large', filename: 'two.json' });
 });
 
 test('the exact serialized upload is capped independently of original text size', () => {
   // JSON.parse permits literal lone UTF-16 surrogates. JSON.stringify escapes
   // them, so a direct caller's text can expand even with compact serialization.
-  const catalog = [theme('escaped', Array.from({ length: 35 }, (_, index) => variation(`escaped-${index}`, '\ud800'.repeat(40_000))))];
+  const maximumBytes = 2048;
+  const catalog = [theme('escaped', [variation('escaped-one', '\ud800'.repeat(400))])];
   const text = JSON.stringify(catalog).replaceAll('\\ud800', '\ud800');
-  assert.ok(bytes(text) < MAX_IMPORT_BYTES);
-  assert.ok(bytes(JSON.stringify(catalog)) > MAX_IMPORT_BYTES);
-  assert.throws(() => buildFileBatch([{ name: 'escaped.json', text }]), { code: 'payload_too_large' });
+  assert.ok(bytes(text) < maximumBytes);
+  assert.ok(bytes(JSON.stringify(catalog)) > maximumBytes);
+  assert.throws(() => buildFileBatch([{ name: 'escaped.json', text }], { maximumBytes }), { code: 'payload_too_large' });
+});
+
+test('300 naturally ordered files and themes with 2400 prompts form a batch above the former 5 MiB cap', () => {
+  const catalog = Array.from({ length: 300 }, (_, themeIndex) => theme(`bulk-${themeIndex + 1}`,
+    Array.from({ length: 8 }, (_, variationIndex) => variation(`bulk-${themeIndex + 1}-${variationIndex + 1}`,
+      `Theme ${themeIndex + 1}, variation ${variationIndex + 1}.\n` + 'Exact original wording. 東京 🌷  '.repeat(85)))));
+  const selected = catalog.map((item, index) => file(`batch_${index + 1}.json`, [item])).reverse();
+  const result = buildFileBatch(selected);
+  assert.ok(bytes(result.source) > 5 * 1024 * 1024);
+  assert.ok(bytes(result.source) < MAX_IMPORT_BYTES);
+  assert.equal(result.files.length, 300);
+  assert.equal(result.incoming.length, 300);
+  assert.equal(result.incoming.reduce((count, item) => count + item.variations.length, 0), 2400);
+  assert.deepEqual(result.incoming, catalog);
+  assert.equal(result.files[0].name, 'batch_1.json');
+  assert.equal(result.files.at(-1).name, 'batch_300.json');
+  assert.equal(result.duplicateVariationsAcrossFiles, 0);
 });
 
 test('paste stays one strict JSON array rather than implicitly concatenating documents', () => {

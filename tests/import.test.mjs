@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, truncate } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
   API_VERSION, REPOSITORY, MAX_CATALOG_BYTES, GitHubClient, GitHubApiError,
   gitBlobSha, sha256Hex, readDispatch, mergeRemoteCatalog, runValidation, runMerge,
 } from '../tools/import-data.mjs';
-import { MAX_IMPORT_BYTES } from '../assets/catalog.mjs';
+import { MAX_IMPORT_BYTES, measureCatalogBytes } from '../assets/catalog.mjs';
 import { buildSite } from '../tools/build-site.mjs';
 
 const TOKEN = 'fixture-token-not-a-real-credential';
@@ -303,9 +303,19 @@ test('permission errors are not retried and do not log GitHub response contents'
 });
 
 test('download cap is enforced even when the response has no content-length header', async () => {
-  const bytes = Buffer.alloc(MAX_IMPORT_BYTES + 1, 32);
+  const maximumBytes = 64;
+  const bytes = Buffer.alloc(maximumBytes + 1, 32);
   const client = new GitHubClient({ token: TOKEN, fetchImpl: async () => new Response(bytes) });
-  await assert.rejects(client.blob(gitBlobSha(bytes)), { code: 'response_too_large' });
+  await assert.rejects(client.blob(gitBlobSha(bytes), maximumBytes), { code: 'response_too_large' });
+});
+
+test('the 100 MB response header is checked before consuming the download stream', async () => {
+  let cancelled = false;
+  const client = new GitHubClient({ token: TOKEN, fetchImpl: async () => new Response(new ReadableStream({
+    cancel() { cancelled = true; },
+  }), { headers: { 'content-length': String(MAX_IMPORT_BYTES + 1) } }) });
+  await assert.rejects(client.blob('a'.repeat(40)), { code: 'response_too_large' });
+  assert.equal(cancelled, true);
 });
 
 test('a corrupt blob response is rejected by its content-addressed SHA', async () => {
@@ -313,26 +323,33 @@ test('a corrupt blob response is rejected by its content-addressed SHA', async (
   await assert.rejects(client.blob('a'.repeat(40)), { code: 'blob_integrity_error' });
 });
 
-test('a stored catalog larger than 5 MiB is retrieved via blob and can be extended', async (t) => {
+test('a stored catalog above the former 16 MiB cap can be downloaded, extended and built', async (t) => {
   const directory = await fixture(t);
   const large = [{
     id: 'large-theme', name: 'Large theme',
-    variations: Array.from({ length: 160 }, (_, index) => ({
-      id: 'large-prompt-' + index, name: 'Large prompt ' + index, prompt: 'p'.repeat(35_000),
+    variations: Array.from({ length: 480 }, (_, index) => ({
+      id: 'large-prompt-' + index, name: 'Large prompt ' + index, prompt: 'p'.repeat(37_000),
     })),
   }];
-  assert.ok(encode(large).byteLength > MAX_IMPORT_BYTES);
+  assert.ok(measureCatalogBytes(large, { pretty: true }) > 16 * 1024 * 1024);
+  assert.ok(measureCatalogBytes(large, { pretty: true }) < MAX_CATALOG_BYTES);
   const api = fakeGitHub(large);
   const result = await mergeRemoteCatalog({
     incoming: [item('new')], client: new GitHubClient({ token: TOKEN, fetchImpl: api.fetchImpl }),
     directory, log: () => {},
   });
   assert.equal(result.addedThemes, 1);
-  assert.equal(api.catalog[0].variations.length, 160);
+  assert.equal(api.catalog[0].variations.length, 480);
   assert.equal(api.putCount, 1);
+  await mkdir(path.join(directory, 'assets'));
+  await writeFile(path.join(directory, 'index.html'), '<!doctype html><title>Large catalog fixture</title>');
+  await writeFile(path.join(directory, 'rulebook.txt'), 'Rules');
+  const built = await buildSite({ directory, env: { BUILD_SHA: 'c'.repeat(40) }, log: () => {} });
+  assert.equal(built.variations, 481);
+  assert.deepEqual(await readFile(path.join(built.directory, 'data.json')), api.bytes);
 });
 
-test('a stored file over 16 MiB is refused before its contents are downloaded', async () => {
+test('a stored file above GitHub\'s 100 MB boundary is refused before its contents are downloaded', async () => {
   let calls = 0;
   const client = new GitHubClient({ token: TOKEN, fetchImpl: async () => {
     calls += 1;
@@ -342,6 +359,32 @@ test('a stored file over 16 MiB is refused before its contents are downloaded', 
   } });
   await assert.rejects(client.snapshot(), { code: 'catalog_too_large' });
   assert.equal(calls, 2);
+});
+
+test('pretty canonical expansion is checked before any local or remote modification', async (t) => {
+  const directory = await fixture(t);
+  await writeFile(path.join(directory, 'data.json'), 'local sentinel');
+  const current = [item()];
+  const incoming = [item('new')];
+  const finalCatalog = [...current, ...incoming];
+  const maximumCatalogBytes = Buffer.byteLength(JSON.stringify(finalCatalog));
+  assert.ok(measureCatalogBytes(current, { pretty: true }) < maximumCatalogBytes);
+  assert.ok(measureCatalogBytes(finalCatalog, { pretty: true }) > maximumCatalogBytes);
+  const api = fakeGitHub(current);
+  await assert.rejects(mergeRemoteCatalog({
+    incoming, client: new GitHubClient({ token: TOKEN, fetchImpl: api.fetchImpl }),
+    directory, maximumCatalogBytes, log: () => {},
+  }), { code: 'catalog_too_large' });
+  assert.equal(api.putCount, 0);
+  assert.equal(await readFile(path.join(directory, 'data.json'), 'utf8'), 'local sentinel');
+});
+
+test('the final update checks its byte size before allocating a Base64 body or calling GitHub', async () => {
+  let calls = 0;
+  const client = new GitHubClient({ token: TOKEN, fetchImpl: async () => { calls += 1; } });
+  const bytes = { byteLength: MAX_CATALOG_BYTES + 1, toString() { throw new Error('Must not encode'); } };
+  await assert.rejects(client.update(bytes, 'a'.repeat(40)), { code: 'catalog_too_large' });
+  assert.equal(calls, 0);
 });
 
 test('site build publishes only its explicit public files and preserves catalog bytes', async (t) => {
@@ -373,5 +416,17 @@ test('site build rejects symbolic links before replacing the existing build', as
   await writeFile(path.join(directory, 'rulebook.txt'), 'Rules');
   await symlink(path.join(directory, 'rulebook.txt'), path.join(directory, 'assets', 'external'));
   await assert.rejects(buildSite({ directory, env: { BUILD_SHA: 'c'.repeat(40) }, log: () => {} }), /Symbolic links/);
+  assert.equal(await readFile(path.join(directory, '_site', 'sentinel'), 'utf8'), 'keep');
+});
+
+test('site build refuses a file over the shared provider limit before reading it or replacing the build', async (t) => {
+  const directory = await fixture(t);
+  await mkdir(path.join(directory, '_site'));
+  await writeFile(path.join(directory, '_site', 'sentinel'), 'keep');
+  await writeFile(path.join(directory, 'index.html'), '<!doctype html>');
+  await writeFile(path.join(directory, 'rulebook.txt'), 'Rules');
+  await writeFile(path.join(directory, 'data.json'), '[]');
+  await truncate(path.join(directory, 'data.json'), MAX_CATALOG_BYTES + 1);
+  await assert.rejects(buildSite({ directory, env: { BUILD_SHA: 'c'.repeat(40) }, log: () => {} }), /100 MB/);
   assert.equal(await readFile(path.join(directory, '_site', 'sentinel'), 'utf8'), 'keep');
 });

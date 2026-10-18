@@ -2,10 +2,9 @@ import { readFile, writeFile, appendFile, copyFile, readdir, lstat, mkdir, rm } 
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateCatalog, CatalogError } from '../assets/catalog.mjs';
+import { validateCatalog, CatalogError, MAX_CATALOG_BYTES } from '../assets/catalog.mjs';
 
 const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
-const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
 const PUBLIC_FILES = ['index.html', 'data.json', 'rulebook.txt'];
 
 async function regularFile(filename) {
@@ -58,8 +57,9 @@ export async function buildSite({ directory = PROJECT_ROOT, env = process.env, l
   const destination = path.join(root, '_site');
   for (const filename of PUBLIC_FILES) await regularFile(path.join(root, filename));
   const catalogInfo = await lstat(path.join(root, 'data.json'));
-  if (catalogInfo.size > MAX_CATALOG_BYTES) throw new Error('The complete catalog exceeds the 16 MiB limit.');
+  if (catalogInfo.size > MAX_CATALOG_BYTES) throw new Error('The complete catalog exceeds GitHub\'s 100 MB file limit.');
   const bytes = await readFile(path.join(root, 'data.json'));
+  if (bytes.byteLength > MAX_CATALOG_BYTES) throw new Error('The complete catalog exceeds GitHub\'s 100 MB file limit.');
   let catalog;
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
