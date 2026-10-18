@@ -34,6 +34,8 @@ function fixture({ clientConfig = config, target = installation, list = [install
   let minted = 0;
   const fetchImpl = async function (url, init) {
     assert.equal(this, globalThis, 'Native fetch must retain its global receiver');
+    if (init.redirect === 'error') throw new TypeError('Workers only support redirect modes follow and manual.');
+    assert.equal(init.redirect, 'manual', 'GitHub credentials must never follow a redirect');
     calls.push({ url, init });
     const handled = intercept && await intercept(url, init);
     if (handled !== undefined) return handled;
@@ -198,7 +200,7 @@ test('staging and dispatch preserve their browser contracts and fixed destinatio
     assert.ok(call.url.startsWith('https://api.github.com/'));
     assert.equal(call.init.headers['X-GitHub-Api-Version'], API_VERSION);
     assert.equal(call.init.headers['User-Agent'], 'seo-yuna-owner');
-    assert.equal(call.init.redirect, 'error');
+    assert.equal(call.init.redirect, 'manual');
     assert.equal(call.init.cache, 'no-store');
     assert.ok(call.init.signal instanceof AbortSignal);
     assert.ok(!call.url.includes('Bearer') && !call.url.includes('ghs_'));
@@ -325,4 +327,30 @@ test('recovery finds only an exact request ID and keeps branch and pagination bo
   } });
   assert.equal((await client.findRun(receipt.requestId, new Date(clock).toISOString())).id, 888);
   assert.deepEqual(pages, [1, 2]);
+});
+
+test('unexpected redirects cannot move app credentials or dispatches to another destination', async t => {
+  for (const status of [301, 302, 303, 304, 307, 308]) await t.test(`dispatch:${status}`, async () => {
+    let cancelled = false;
+    const { client, calls } = fixture({ repoResponse: () => new Response(status === 304 ? null : new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('sensitive upstream body')); },
+      cancel() { cancelled = true; },
+    }), { status, headers: { Location: 'https://attacker.example/credential-leak' } }) });
+    await assert.rejects(client.dispatch(receipt), error => error instanceof GitHubError && error.status === 502 &&
+      !error.uncertain && !/sensitive|attacker|credential-leak/.test(error.message));
+    assert.equal(calls.filter(call => call.url.endsWith('/dispatches')).length, 1);
+    assert.ok(calls.every(call => call.url.startsWith('https://api.github.com/') && call.init.redirect === 'manual'));
+    if (status !== 304) assert.equal(cancelled, true);
+  });
+  for (const suffix of ['/installation', '/access_tokens', `/contents/data.json?ref=${BRANCH}`]) {
+    await t.test(`app request:${suffix}`, async () => {
+      const { client, calls } = fixture({ intercept: url => url.endsWith(suffix)
+        ? new Response(null, { status: 307, headers: { Location: 'https://attacker.example/credential-leak' } }) : undefined });
+      await assert.rejects(client.readCanonical(), error => error instanceof GitHubError && error.status === 502 && !error.uncertain);
+      assert.ok(calls.every(call => call.url.startsWith('https://api.github.com/') && call.init.redirect === 'manual'));
+      assert.equal(calls.filter(call => call.url.endsWith(suffix)).length, 1);
+      assert.ok(!calls.some(call => call.url.includes('attacker')));
+      if (suffix === '/installation') assert.ok(!calls.some(call => call.url.endsWith('/access_tokens')));
+    });
+  }
 });

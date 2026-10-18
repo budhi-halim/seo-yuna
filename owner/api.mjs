@@ -12,12 +12,17 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const encoder = new TextEncoder();
 
 /** GitHub requires User-Agent on server requests. Bound response streams before
- * the shared client buffers JSON, reserving Worker memory for parsing/merging. */
+ * the shared client buffers JSON, reserving Worker memory for parsing/merging.
+ * Workers only support manual/follow redirects. Never follow credentialed requests. */
 export function createServerGitHubFetch(fetchImpl = globalThis.fetch) {
   return async function serverGitHubFetch(url, options = {}) {
     const headers = new Headers(options.headers);
     headers.set('User-Agent', 'seo-yuna-owner');
-    const response = await fetchImpl.call(globalThis, url, { ...options, headers });
+    const response = await fetchImpl.call(globalThis, url, { ...options, headers, redirect: 'manual' });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new GitHubError('GitHub returned an unexpected redirect. The request was not followed.', response.status);
+    }
     const maximum = String(url).includes('/contents/data.json?') ? MAX_CANONICAL_BYTES : 8 * 1024 * 1024;
     const declared = response.headers.get('Content-Length');
     if (declared && Number(declared) > maximum) {

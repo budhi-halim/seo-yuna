@@ -64,9 +64,14 @@ function fixture(t, { converted = conversion, conversionResponse, installationRe
   const db = database(t);
   const env = { DB: db, APP_ORIGIN: appOrigin, APP_CREDENTIAL_KEY: randomBytes(32).toString('base64') };
   const calls = [];
+  const diagnostics = [];
+  t.mock.method(console, 'warn', (...args) => diagnostics.push(args));
   let instant = clock;
   const fetchImpl = async function (url, init) {
     assert.equal(this, globalThis, 'Native fetch must retain its global receiver');
+    if (init.redirect !== undefined && !['follow', 'manual'].includes(init.redirect)) {
+      throw new TypeError('Workerd requires redirect to be follow or manual');
+    }
     calls.push({ url, init });
     const overridden = fetchOverride && await fetchOverride(url, init);
     if (overridden !== undefined) return overridden;
@@ -82,7 +87,7 @@ function fixture(t, { converted = conversion, conversionResponse, installationRe
   const options = { fetchImpl, cryptoImpl: webcrypto, now: () => instant,
     ...(githubClientFactory ? { githubClientFactory } : {}), ...(timeoutMs ? { timeoutMs } : {}) };
   const service = new SetupService(env, options);
-  return { db, env, calls, service, options, now: () => instant, advance(ms) { instant += ms; } };
+  return { db, env, calls, diagnostics, service, options, now: () => instant, advance(ms) { instant += ms; } };
 }
 
 function post(path, { requestOrigin = origin, urlOrigin = origin, body } = {}) {
@@ -132,6 +137,12 @@ const configCount = f => f.db.raw.prepare('SELECT count(*) AS count FROM app_con
 const stateCount = f => f.db.raw.prepare('SELECT count(*) AS count FROM oauth_states').get().count;
 const conversionCalls = f => f.calls.filter(call => call.url.includes('/app-manifests/'));
 const readConfig = f => getAppConfig(f.env, { cryptoImpl: webcrypto });
+const diagnosticDetails = f => f.diagnostics.map(args => {
+  assert.equal(args.length, 1);
+  return JSON.parse(args[0]);
+});
+const manifestFrom = html => JSON.parse(html.match(/name="manifest" value="([^"]+)"/)[1]
+  .replace(/&(quot|amp|lt|gt|#39);/g, entity => ({ '&quot;': '"', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&#39;': "'" })[entity]));
 
 test('the manifest pins private ownership scope, callbacks, inactive hooks, and minimum permissions', () => {
   const manifest = createManifest(origin);
@@ -164,6 +175,21 @@ test('setup is a same-origin POST and request body parameters cannot change the 
   const body = await response.text();
   assert.ok(!body.includes('attacker') && !body.includes('sakura-yuki'));
   assert.ok(body.includes('&quot;public&quot;:false'));
+});
+
+test('fresh registrations propose distinct valid names while preserving fixed callbacks and permissions', async t => {
+  const f = fixture(t);
+  const first = await begin(f);
+  const second = await begin(f);
+  const manifests = [manifestFrom(first.html), manifestFrom(second.html)];
+  assert.notEqual(manifests[0].name, manifests[1].name);
+  for (const manifest of manifests) {
+    assert.match(manifest.name, /^SeoYunaBudhiHalim-[a-f0-9]{8}$/);
+    assert.deepEqual({ ...manifest, name: 'SeoYunaBudhiHalim' }, createManifest(origin));
+    assert.ok(!manifest.name.includes(first.token) && !manifest.name.includes(second.token));
+  }
+  assert.equal(configCount(f), 0);
+  assert.equal(f.calls.length, 0);
 });
 
 test('registration state is random, hashed, encrypted, bound to this site, and expires after ten minutes', async t => {
@@ -205,7 +231,7 @@ test('conversion verifies the fixed owner and stores only encrypted normalized c
   assert.equal(call.init.method, 'POST');
   assert.equal(call.init.headers['X-GitHub-Api-Version'], API_VERSION);
   assert.equal(call.init.headers.Authorization, undefined);
-  assert.equal(call.init.redirect, 'error');
+  assert.equal(call.init.redirect, 'manual');
   assert.equal(call.init.cache, 'no-store');
   assert.ok(call.init.signal instanceof AbortSignal);
   const installRow = f.db.raw.prepare('SELECT * FROM oauth_states').get();
@@ -332,6 +358,100 @@ test('concurrent callbacks consume state once and the singleton can never be ove
     assert.equal(f.db.raw.prepare('SELECT payload FROM app_config').get().payload, original);
     assert.equal(conversionCalls(f).length, 2);
   });
+});
+
+test('conversion uses Workerd-compatible manual redirects and rejects a 302 without following its destination', async t => {
+  const destination = `https://attacker.example/${code}?secret=${conversion.client_secret}`;
+  const f = fixture(t, { conversionResponse: () => new Response('private upstream body', {
+    status: 302, headers: { Location: destination },
+  }) });
+  const response = await f.service.handle(callback(await begin(f)));
+  const body = await response.text();
+  assert.equal(response.status, 502);
+  assert.match(body, /data-error-code="conversion_http_failed"/);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].init.redirect, 'manual');
+  assert.ok(!f.calls.some(call => call.url === destination));
+  assert.equal(response.headers.get('Location'), null);
+  assert.equal(configCount(f), 0);
+  assert.deepEqual(diagnosticDetails(f), [{ event: 'seo_yuna_setup_conversion_failure', phase: 'http', status: 302 }]);
+  assert.ok(!body.includes(destination) && !body.includes('private upstream body') && !body.includes('<script'));
+  assert.ok(response.headers.get('Content-Security-Policy').includes("default-src 'none'"));
+  assert.ok(!response.headers.get('Content-Security-Policy').includes('unsafe-inline'));
+});
+
+test('HTTP conversion diagnostics include only a numeric status and a bounded GitHub request ID', async t => {
+  for (const [name, requestId, expected] of [
+    ['valid request ID', '012A:345B:678C:90DE:F123', '012A:345B:678C:90DE:F123'],
+    ['credential-shaped value', conversion.client_secret, undefined],
+    ['oversized value', 'ABCD:'.repeat(30), undefined],
+  ]) await t.test(name, async st => {
+    const f = fixture(st, { conversionResponse: () => new Response(JSON.stringify({
+      message: code, token: conversion.client_secret, pem: privateKey,
+    }), { status: 422, headers: { 'X-GitHub-Request-Id': requestId } }) });
+    const response = await f.service.handle(callback(await begin(f)));
+    const body = await response.text();
+    assert.equal(response.status, 502);
+    assert.match(body, /data-error-code="conversion_http_failed"/);
+    assert.match(body, /may already exist on GitHub/);
+    assert.deepEqual(diagnosticDetails(f), [{ event: 'seo_yuna_setup_conversion_failure', phase: 'http', status: 422,
+      ...(expected ? { githubRequestId: expected } : {}) }]);
+    const displayed = body + JSON.stringify(f.diagnostics);
+    for (const secret of [code, conversion.client_secret, privateKey, 'app-manifests/']) assert.ok(!displayed.includes(secret));
+  });
+});
+
+test('transport errors have an allowlisted category without exposing exception details', async t => {
+  for (const [name, error, category] of [
+    ['ordinary error', new Error(`${code} ${conversion.client_secret} ${privateKey}`), 'Error'],
+    ['runtime type error', new TypeError(`${code} ${conversion.client_secret}`), 'TypeError'],
+    ['untrusted error name', Object.assign(new Error(code), { name: conversion.client_secret }), 'UnknownError'],
+  ]) await t.test(name, async st => {
+    const f = fixture(st, { fetchOverride: () => { throw error; } });
+    const start = await begin(f);
+    const response = await f.service.handle(callback(start));
+    const body = await response.text();
+    assert.equal(response.status, 502);
+    assert.match(body, /data-error-code="conversion_transport_failed"/);
+    assert.deepEqual(diagnosticDetails(f), [{ event: 'seo_yuna_setup_conversion_failure', phase: 'transport', category }]);
+    const displayed = body + JSON.stringify(f.diagnostics);
+    for (const secret of [code, conversion.client_secret, privateKey, 'app-manifests/']) assert.ok(!displayed.includes(secret));
+    assert.equal(configCount(f), 0);
+    assert.equal((await f.service.handle(callback(start))).status, 400);
+    assert.equal(f.calls.length, 1);
+  });
+});
+
+test('conversion timeout aborts once and remains distinct from HTTP and transport failures', async t => {
+  const f = fixture(t, { timeoutMs: 10, fetchOverride: (_, init) => new Promise((resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(new DOMException(`${code} ${conversion.client_secret}`, 'AbortError')), { once: true });
+  }) });
+  const start = await begin(f);
+  const response = await f.service.handle(callback(start));
+  const body = await response.text();
+  assert.equal(response.status, 502);
+  assert.match(body, /data-error-code="conversion_timeout"/);
+  assert.deepEqual(diagnosticDetails(f), [{ event: 'seo_yuna_setup_conversion_failure', phase: 'timeout', category: 'AbortError' }]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].init.signal.aborted, true);
+  assert.equal(configCount(f), 0);
+  assert.equal(stateCount(f), 0);
+  assert.ok(!JSON.stringify(f.diagnostics).includes(code) && !body.includes(conversion.client_secret));
+});
+
+test('RSA import failure after a 201 has a separate safe category and preserves the existing persistence boundary', async t => {
+  const f = fixture(t, { converted: { ...copy(conversion),
+    pem: `-----BEGIN RSA PRIVATE KEY-----\n${'A'.repeat(1024)}\n-----END RSA PRIVATE KEY-----\n` } });
+  const response = await f.service.handle(callback(await begin(f)));
+  const body = await response.text();
+  assert.equal(response.status, 502);
+  assert.match(body, /data-error-code="conversion_key_invalid"/);
+  assert.match(body, /do not create another app yet/);
+  assert.deepEqual(diagnosticDetails(f), [{ event: 'seo_yuna_setup_conversion_failure', phase: 'key', category: 'GitHubError' }]);
+  assert.equal(configCount(f), 0);
+  assert.equal(f.calls.length, 1);
+  const displayed = body + JSON.stringify(f.diagnostics);
+  for (const secret of [code, conversion.client_secret, 'PRIVATE KEY', 'A'.repeat(100)]) assert.ok(!displayed.includes(secret));
 });
 
 test('conversion failures are bounded, sanitized, and never automatically retried', async t => {

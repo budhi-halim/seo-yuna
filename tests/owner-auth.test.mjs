@@ -65,6 +65,8 @@ async function fixture({ config = appConfig, tokenResult, user, repository, time
   const calls = [];
   const fetchImpl = async function (url, init) {
     assert.equal(this, globalThis, 'Native fetch must retain its global receiver');
+    if (init.redirect === 'error') throw new TypeError('Workers only support redirect modes follow and manual.');
+    assert.equal(init.redirect, 'manual', 'GitHub credentials must never follow a redirect');
     calls.push({ url, init });
     const intercepted = state.intercept && await state.intercept(url, init);
     if (intercepted !== null && intercepted !== undefined) return intercepted;
@@ -215,7 +217,7 @@ test('callback exchanges the code server-side and creates an encrypted owner ses
   assert.match(body.code_verifier, /^[A-Za-z0-9_-]{43}$/);
   assert.deepEqual(f.calls.slice(1).map(call => call.url), ['https://api.github.com/user', `https://api.github.com/repos/${REPOSITORY}`]);
   for (const call of f.calls) {
-    assert.equal(call.init.redirect, 'error');
+    assert.equal(call.init.redirect, 'manual');
     assert.equal(call.init.cache, 'no-store');
     assert.equal(call.init.headers['X-GitHub-Api-Version'], API_VERSION);
     assert.ok(!call.url.includes(appConfig.clientSecret) && !call.url.includes(accessToken));
@@ -468,4 +470,35 @@ test('OAuth exchange timeout aborts once, consumes state, and returns a sanitize
   assert.equal(f.calls[0].init.signal.aborted, true);
   assert.equal(f.db.rows('oauth_states').length, 0);
   assert.equal(f.db.rows('sessions').length, 0);
+});
+
+test('OAuth exchange and identity checks reject every unexpected redirect without forwarding credentials', async t => {
+  const destinations = ['https://github.com/login/oauth/access_token', 'https://api.github.com/user',
+    `https://api.github.com/repos/${REPOSITORY}`];
+  for (const [index, destination] of destinations.entries()) {
+    for (const status of [301, 302, 303, 304, 307, 308]) await t.test(`${index}:${status}`, async () => {
+      const f = await fixture();
+      let cancelled = false;
+      f.state.intercept = url => {
+        if (url !== destination) return null;
+        const body = status === 304 ? null : new ReadableStream({
+          start(controller) { controller.enqueue(new TextEncoder().encode(`${accessToken} ${appConfig.clientSecret}`)); },
+          cancel() { cancelled = true; },
+        });
+        return new Response(body, { status, headers: { Location: 'https://attacker.example/credential-leak' } });
+      };
+      const started = await f.begin();
+      const response = await f.callback(started);
+      assert.equal(response.status, 502);
+      const failure = await response.json();
+      assert.equal(failure.code, 'github_redirect_rejected');
+      assert.ok(!JSON.stringify(failure).includes(accessToken) && !JSON.stringify(failure).includes(appConfig.clientSecret));
+      assert.ok(!JSON.stringify(failure).includes('attacker') && !JSON.stringify(failure).includes('credential-leak'));
+      assert.deepEqual(f.calls.map(call => call.url), destinations.slice(0, index + 1));
+      assert.ok(f.calls.every(call => call.init.redirect === 'manual'));
+      assert.equal(f.db.rows('sessions').length, 0);
+      assert.equal(f.db.rows('oauth_states').length, 0);
+      if (status !== 304) assert.equal(cancelled, true);
+    });
+  }
 });

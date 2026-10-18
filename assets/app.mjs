@@ -4,6 +4,7 @@ import { OwnerClient } from './owner-client.mjs';
 import { createShortcutHandler, wrapIndex } from './shortcuts.mjs';
 import { readReceipts, writeReceipts } from './receipts.mjs';
 import { sortFiles, buildFileBatch } from './import-batch.mjs';
+import { searchNumberedEntries } from './selector-search.mjs';
 
 const $ = id => document.getElementById(id);
 const all = selector => [...document.querySelectorAll(selector)];
@@ -87,13 +88,53 @@ function saveSelection() {
   try { storage?.setItem(selectionKey, JSON.stringify({ themeId: theme?.id, variationId: variation?.id })); } catch { /* Selection persistence is optional. */ }
 }
 
+function renderSelectionSearch(kind) {
+  const theme = catalog[themeIndex];
+  const entries = kind === 'theme' ? catalog : theme?.variations ?? [];
+  const currentId = kind === 'theme' ? theme?.id : theme?.variations[variationIndex]?.id;
+  const input = $(`${kind}-search`);
+  const select = $(`${kind}-select`);
+  const result = searchNumberedEntries(entries, input.value, currentId);
+  const options = [];
+  if (result.retained) {
+    const current = element('optgroup');
+    current.label = `Current ${kind}`;
+    current.append(new Option(result.retained.label, result.retained.id));
+    options.push(current);
+  }
+  const matches = result.matches.map(choice => new Option(choice.label, choice.id));
+  if (result.retained && matches.length) {
+    const group = element('optgroup');
+    group.label = `Matching ${kind}s`;
+    group.append(...matches);
+    options.push(group);
+  } else options.push(...matches);
+  if (!options.length) options.push(new Option(`No ${kind}s yet`, ''));
+  select.replaceChildren(...options);
+  select.value = currentId ?? '';
+  input.disabled = !entries.length;
+  $(`clear-${kind}-search`).hidden = !input.value;
+  const status = $(`${kind}-search-status`);
+  const count = result.matches.length;
+  status.textContent = result.active
+    ? `${count ? `${count} match${count === 1 ? '' : 'es'}` : 'No matches'}${result.retained ? ` · Current ${kind} kept` : ''}`
+    : '';
+  status.classList.toggle('visually-hidden', !result.active);
+  status.dataset.state = count ? 'matches' : 'empty';
+}
+
+function clearSelectionSearch(kind) {
+  $(`${kind}-search`).value = '';
+  shortcuts.reset();
+  renderSelectionSearch(kind);
+  $(`${kind}-search`).focus({ preventScroll: true });
+}
+
 function renderSelection() {
   const theme = catalog[themeIndex];
   const variation = theme?.variations[variationIndex];
-  $('theme-select').value = theme?.id ?? '';
-  const choices = (theme?.variations ?? []).map((entry, index) => new Option(`${index + 1}. ${entry.name}`, entry.id));
-  $('variation-select').replaceChildren(...choices);
-  $('variation-select').value = variation?.id ?? '';
+  renderSelectionSearch('theme');
+  renderSelectionSearch('variation');
   $('current-theme-name').textContent = theme?.name ?? 'Your collection';
   $('current-variation-name').textContent = variation?.name ?? 'No variation selected';
   $('prompt-output').textContent = variation?.prompt ?? 'This theme has no variations yet.';
@@ -111,7 +152,7 @@ function useCatalog(next) {
   catalog = validateCatalog(next);
   themeIndex = Math.max(0, catalog.findIndex(theme => theme.id === oldThemeId));
   variationIndex = Math.max(0, (catalog[themeIndex]?.variations ?? []).findIndex(variation => variation.id === oldVariationId));
-  $('theme-select').replaceChildren(...catalog.map((theme, index) => new Option(`${index + 1}. ${theme.name}`, theme.id)));
+  if (catalog[themeIndex]?.id !== oldThemeId) $('variation-search').value = '';
   $('theme-count').textContent = String(catalog.length);
   $('total-prompts').textContent = String(catalog.reduce((total, theme) => total + theme.variations.length, 0));
   renderSelection();
@@ -126,6 +167,8 @@ async function loadPublishedCatalog() {
 }
 
 function chooseTheme(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= catalog.length) return;
+  if (index !== themeIndex) $('variation-search').value = '';
   saveSelection();
   themeIndex = index;
   const theme = catalog[themeIndex];
@@ -632,9 +675,23 @@ $('prev-variation').addEventListener('click', () => moveVariation(-1));
 $('next-variation').addEventListener('click', () => moveVariation(1));
 $('theme-select').addEventListener('change', event => chooseTheme(catalog.findIndex(theme => theme.id === event.target.value)));
 $('variation-select').addEventListener('change', event => {
-  variationIndex = catalog[themeIndex].variations.findIndex(variation => variation.id === event.target.value);
+  const next = catalog[themeIndex]?.variations.findIndex(variation => variation.id === event.target.value) ?? -1;
+  if (next < 0) return;
+  variationIndex = next;
   renderSelection();
 });
+for (const kind of ['theme', 'variation']) {
+  $(`${kind}-search`).addEventListener('input', () => { shortcuts.reset(); renderSelectionSearch(kind); });
+  $(`${kind}-search`).addEventListener('keydown', event => {
+    if (event.isComposing) return;
+    if (event.key === 'Escape' && event.target.value) { event.preventDefault(); clearSelectionSearch(kind); }
+    else if (['Enter', 'ArrowDown'].includes(event.key) && !$(`${kind}-select`).disabled) {
+      event.preventDefault();
+      $(`${kind}-select`).focus({ preventScroll: true });
+    }
+  });
+  $(`clear-${kind}-search`).addEventListener('click', () => clearSelectionSearch(kind));
+}
 $('copy-theme').addEventListener('click', () => copyTheme(true));
 $('copy-theme-name').addEventListener('click', () => copyTheme(false));
 $('copy-variation').addEventListener('click', () => copyValue(catalog[themeIndex]?.variations[variationIndex]?.name, 'Variation name'));

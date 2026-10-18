@@ -18,6 +18,8 @@ This repository starts with the **22 themes and 156 prompts** from `budhi-halim/
 
 If registration succeeded but installation was interrupted, **Finish GitHub setup** resumes that connection. Complete installation before signing in. You do not need to register a new app on each browser or visit. On later visits, open the owner studio and sign in with GitHub if the existing session has expired.
 
+If a registration attempt failed before its connection could be saved, return to the owner studio and start a fresh setup. Each new attempt proposes a distinct app name so an unfinished earlier registration does not block it. A saved connection is always resumed; starting setup never replaces its credentials.
+
 The studio has no credential-entry form. GitHub handles account sign-in, and the server exchanges the authorization code and keeps the resulting GitHub credentials encrypted. An HTTP-only session cookie connects the browser to that verified account. The backend checks both the fixed GitHub user ID and the owner login before accepting writes; client-side edits cannot grant repository access.
 
 ### Repository publication
@@ -31,6 +33,12 @@ The workflow uses GitHub's built-in `GITHUB_TOKEN` for its catalog commit and Pa
 ## Using the studio
 
 The **Prompts**, **Add JSON**, and **Activity** tabs are views in one HTML page. The outer page fits the viewport; long prompts, the JSON editor, and activity use internal scrolling. Native dropdowns, navigation buttons, and copy buttons remain available on touch screens.
+
+### Find a theme or variation
+
+Each selector has a search field for its displayed number, name, or both. Name searches ignore case. A leading number matches the exact displayed position: `2` finds item 2, while `12 glacial`, `12. glacial cave`, and the full copied title find theme 12. Variation numbers refer to the current theme, and filtered results keep their original numbering.
+
+Searching does not change the displayed prompt or copy target. Choose a matching result from the selector to switch. If the current selection does not match the query, it stays in a labeled current-selection group. The match count makes this distinction visible. Clear the field to restore all options; changing themes clears the previous theme's variation search. Enter or Arrow Down moves from the search field to its selector, and Escape clears the query. A/D and W/S continue to navigate their full lists outside text inputs.
 
 ### Keyboard shortcuts
 
@@ -144,7 +152,7 @@ Official Actions are pinned to full commit SHAs. The frontend and repository scr
 
 ## Development and verification
 
-Use Node.js 22 or later. No package installation is required.
+Use Node.js 22.18 or later. No package installation is required.
 
 ```sh
 node --test tests/*.test.mjs
@@ -163,6 +171,7 @@ The managed owner checkout is separate from the Pages build. `node tools/sync-ow
 | `assets/app.mjs` | Navigation, clipboard actions, validation UI, GitHub account controls, and submission history |
 | `assets/owner-client.mjs` | Exact-origin owner session facade, CSRF-protected imports, and public status fallback |
 | `assets/shortcuts.mjs` | Keyboard gesture and looping navigation rules |
+| `assets/selector-search.mjs` | Number-and-name filtering that preserves displayed positions and current selection |
 | `assets/github.mjs` | Fixed-repository GitHub API client; anonymous in the browser and authenticated only on the owner server |
 | `assets/receipts.mjs` | Explicit nonsecret browser-storage schema |
 | `assets/import-batch.mjs` | Deterministic filename sorting and atomic multi-file batch preparation |

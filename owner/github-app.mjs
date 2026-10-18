@@ -273,12 +273,17 @@ export class AppGitHubClient {
     };
     try {
       const response = await this.#fetch(`${API_ROOT}${path}`, {
-        method, headers, signal: controller.signal, redirect: 'error', cache: 'no-store',
+        // Workers do not implement redirect:'error'; manual never forwards credentials to Location.
+        method, headers, signal: controller.signal, redirect: 'manual', cache: 'no-store',
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       if (!response.ok) {
         if (response.status === 401 && this.#session?.token === token) this.#session = null;
         try { await response.body?.cancel(); } catch { /* Never read upstream error bodies. */ }
+        if (response.status >= 300 && response.status < 400) {
+          throw new GitHubError('GitHub returned an unexpected redirect. Check the app connection before trying again.',
+            502, { uncertain: false });
+        }
         throw new GitHubError(errorMessage(response.status, response.headers), response.status,
           { uncertain: dispatch && (response.status === 0 || response.status >= 500) });
       }

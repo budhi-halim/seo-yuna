@@ -158,11 +158,12 @@ test('server GitHub requests identify the app and stop oversized response stream
   let seenHeaders;
   const fetch = createServerGitHubFetch(async function (_url, options) {
     assert.equal(this, globalThis);
+    assert.equal(options.redirect, 'manual');
     seenHeaders = options.headers;
     return new Response(source);
   });
   const response = await fetch('https://api.github.com/repos/budhi-halim/seo-yuna/contents/data.json?ref=master',
-    { headers: { Authorization: 'Bearer server-fixture' } });
+    { headers: { Authorization: 'Bearer server-fixture' }, redirect: 'error' });
   assert.equal(seenHeaders.get('User-Agent'), 'seo-yuna-owner');
   assert.equal(seenHeaders.get('Authorization'), 'Bearer server-fixture');
   assert.equal(await response.text(), source);
@@ -171,4 +172,20 @@ test('server GitHub requests identify the app and stop oversized response stream
   })));
   const tooLarge = await oversized('https://api.github.com/repos/budhi-halim/seo-yuna/git/blobs');
   await assert.rejects(tooLarge.text(), /limit exceeded/);
+});
+
+test('server GitHub transport never follows redirects with the owner token', async () => {
+  for (const status of [301, 302, 303, 307, 308]) {
+    const calls = [];
+    const fetch = createServerGitHubFetch(async function (url, options) {
+      assert.equal(this, globalThis);
+      assert.equal(options.redirect, 'manual');
+      calls.push(url);
+      return new Response(null, { status, headers: { Location: 'https://untrusted.example.test/' } });
+    });
+    const url = 'https://api.github.com/repos/budhi-halim/seo-yuna/actions/workflows/studio.yml/dispatches';
+    await assert.rejects(fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: 'Bearer fixture' } }),
+      error => error instanceof GitHubError && error.status === status && !error.uncertain);
+    assert.deepEqual(calls, [url]);
+  }
 });

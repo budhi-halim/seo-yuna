@@ -14,6 +14,10 @@ const STUDIO_PATH = '/studio#import';
 const PUBLIC_URL = `https://${OWNER}.github.io/seo-yuna/`;
 const MAX_CONVERSION_BYTES = 64 * 1024;
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+const REGISTRATION_RECOVERY = 'The app may already exist on GitHub. Return to the owner studio before starting another registration.';
+const CONVERSION_PHASES = new Set(['http', 'transport', 'timeout', 'key', 'config']);
+const ERROR_CATEGORIES = new Set(['Error', 'TypeError', 'AbortError', 'TimeoutError', 'NetworkError',
+  'DataError', 'NotSupportedError', 'OperationError', 'InvalidAccessError', 'SyntaxError', 'GitHubError', 'AuthError']);
 
 export class SetupError extends Error {
   constructor(message, status = 503, code = 'setup_unavailable') {
@@ -26,6 +30,22 @@ export class SetupError extends Error {
 
 function fail(message, status = 503, code = 'setup_unavailable') {
   throw new SetupError(message, status, code);
+}
+
+/** No exception messages, callback URLs, conversion codes, or response bodies enter logs. */
+function conversionDiagnostic(phase, { status, requestId, error } = {}) {
+  if (!CONVERSION_PHASES.has(phase)) return;
+  const detail = { event: 'seo_yuna_setup_conversion_failure', phase };
+  if (phase === 'http') {
+    if (Number.isInteger(status) && status >= 100 && status <= 599) detail.status = status;
+    if (typeof requestId === 'string' && requestId.length <= 100 &&
+        /^[a-f0-9]{1,16}(?::[a-f0-9]{1,16}){1,7}$/i.test(requestId)) detail.githubRequestId = requestId;
+  } else {
+    let name;
+    try { name = error?.name; } catch { /* Unknown objects never contribute log content. */ }
+    detail.category = ERROR_CATEGORIES.has(name) ? name : 'UnknownError';
+  }
+  try { console.warn(JSON.stringify(detail)); } catch { /* Logging must not change setup behavior. */ }
 }
 
 function object(value) {
@@ -144,7 +164,7 @@ function convertedConfig(value) {
       !/^-----BEGIN (RSA PRIVATE KEY|PRIVATE KEY)-----[\r\n \t]+[A-Za-z0-9+/=\r\n \t]+[\r\n \t]+-----END \1-----[\r\n \t]*$/.test(value.pem) ||
       (value.html_url !== undefined && value.html_url !== `https://github.com/apps/${value.slug}`) ||
       (value.external_url !== undefined && value.external_url !== PUBLIC_URL)) {
-    fail('GitHub returned an incomplete app connection. Start setup again from the owner studio.', 502, 'invalid_app_response');
+    fail(`GitHub returned an incomplete app connection. ${REGISTRATION_RECOVERY}`, 502, 'invalid_app_response');
   }
   return validateAppConfig({ appId: value.id, clientId: value.client_id, clientSecret: value.client_secret,
     privateKey: value.pem.trim(), slug: value.slug, installationId: null });
@@ -278,26 +298,43 @@ export class SetupService {
 
   async #convert(code) {
     if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(code)) {
-      fail('GitHub did not return a valid app registration. Start setup again from the owner studio.', 400, 'invalid_conversion');
+      fail(`GitHub did not return a valid app registration. ${REGISTRATION_RECOVERY}`, 400, 'invalid_conversion');
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeout);
+    let phase = 'transport';
     try {
       const response = await this.#fetch(`https://api.github.com/app-manifests/${code}/conversions`, {
         method: 'POST', headers: { Accept: 'application/vnd.github+json',
           'X-GitHub-Api-Version': API_VERSION, 'User-Agent': 'seo-yuna-owner' },
-        cache: 'no-store', redirect: 'error', signal: controller.signal,
+        // Workerd supports manual redirects; reject every non-201 response below.
+        cache: 'no-store', redirect: 'manual', signal: controller.signal,
       });
+      phase = 'config';
       if (response.status !== 201) {
+        conversionDiagnostic('http', { status: response.status, requestId: response.headers.get('x-github-request-id') });
         try { await response.body?.cancel(); } catch { /* Never return a conversion response body. */ }
-        fail('GitHub could not complete app registration. Start setup again from the owner studio.', 502, 'conversion_failed');
+        fail(`GitHub did not confirm the app connection. ${REGISTRATION_RECOVERY}`, 502, 'conversion_http_failed');
       }
       const config = convertedConfig(await readConversion(response));
+      phase = 'key';
       await validatePrivateKey(config.privateKey, { cryptoImpl: this.#crypto });
       return config;
     } catch (error) {
       if (error instanceof SetupError) throw error;
-      fail('GitHub could not complete app registration. Start setup again from the owner studio.', 502, 'conversion_failed');
+      if (phase === 'key') {
+        conversionDiagnostic('key', { error });
+        fail('GitHub returned the app connection, but this server could not verify its private key. Return to the owner studio; do not create another app yet.',
+          502, 'conversion_key_invalid');
+      }
+      if (phase === 'transport') {
+        const timedOut = controller.signal.aborted;
+        conversionDiagnostic(timedOut ? 'timeout' : 'transport', { error });
+        fail(`${timedOut ? 'The connection to GitHub timed out.' : 'This server could not complete the connection to GitHub.'} ${REGISTRATION_RECOVERY}`,
+          502, timedOut ? 'conversion_timeout' : 'conversion_transport_failed');
+      }
+      conversionDiagnostic('config', { error });
+      fail(`The app connection could not be verified by this server. ${REGISTRATION_RECOVERY}`, 502, 'conversion_config_invalid');
     } finally {
       clearTimeout(timer);
     }
@@ -329,7 +366,12 @@ export class SetupService {
   async #start(request, origin) {
     if (await this.#row()) fail('This website already has a GitHub App. Continue its installation or sign in from the owner studio.', 409, 'setup_exists');
     const token = await this.#newState(request, 'setup', origin);
-    const manifest = escapeHtml(JSON.stringify(createManifest(origin)));
+    // A failed handshake may leave an app name registered on GitHub. This public
+    // suffix uses separate randomness and never reveals any portion of the state.
+    const suffix = Array.from(this.#crypto.getRandomValues(new Uint8Array(4)), byte => byte.toString(16).padStart(2, '0')).join('');
+    const parameters = createManifest(origin);
+    parameters.name = `${parameters.name}-${suffix}`;
+    const manifest = escapeHtml(JSON.stringify(parameters));
     const body = `<p>Continue with the <strong>budhi-halim</strong> GitHub account to register this website’s private connection.</p><p>GitHub will then ask you to install it. Choose <strong>Only select repositories</strong> and select <strong>seo-yuna</strong>.</p><form action="https://github.com/settings/apps/new?state=${token}" method="post"><input type="hidden" name="manifest" value="${manifest}"><button type="submit">Continue on GitHub</button></form><p><a href="${STUDIO_PATH}">Return to owner studio</a></p>`;
     return htmlResponse('Connect GitHub', body, 200, { 'Set-Cookie': cookie(SETUP_COOKIE, token) });
   }

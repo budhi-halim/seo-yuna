@@ -331,7 +331,8 @@ export class AuthService {
     const timer = setTimeout(() => controller.abort(), this.#timeout);
     try {
       const response = await this.#fetch(url, {
-        method: body === undefined ? 'GET' : 'POST', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        // Workers support manual/follow; manual keeps OAuth secrets and user tokens on the fixed endpoint.
+        method: body === undefined ? 'GET' : 'POST', redirect: 'manual', cache: 'no-store', signal: controller.signal,
         headers: { Accept: 'application/json', 'User-Agent': 'seo-yuna-owner',
           'X-GitHub-Api-Version': API_VERSION,
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -340,6 +341,9 @@ export class AuthService {
       });
       if (!response.ok) {
         try { await response.body?.cancel(); } catch { /* Never inspect upstream error bodies. */ }
+        if (response.status >= 300 && response.status < 400) {
+          fail('GitHub returned an unexpected sign-in redirect. Start sign-in again.', 502, 'github_redirect_rejected');
+        }
         if (response.status === 401) fail('Your GitHub session is no longer valid. Sign in again.', 401, 'authentication_required');
         if (response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')) {
           fail('GitHub is limiting requests. Wait before trying again.', 429, 'rate_limited');
