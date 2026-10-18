@@ -32,7 +32,8 @@ function fixture({ clientConfig = config, target = installation, list = [install
   intercept } = {}) {
   const calls = [];
   let minted = 0;
-  const fetchImpl = async (url, init) => {
+  const fetchImpl = async function (url, init) {
+    assert.equal(this, globalThis, 'Native fetch must retain its global receiver');
     calls.push({ url, init });
     const handled = intercept && await intercept(url, init);
     if (handled !== undefined) return handled;

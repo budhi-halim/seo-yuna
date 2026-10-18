@@ -1,5 +1,6 @@
 import { MAX_IMPORT_BYTES, parseCatalog, validateCatalog, mergeCatalog } from './catalog.mjs';
-import { GitHubClient, REPOSITORY_URL, runUrl, describeRun } from './github.mjs';
+import { REPOSITORY_URL, runUrl, describeRun } from './github.mjs';
+import { OwnerClient } from './owner-client.mjs';
 import { createShortcutHandler, wrapIndex } from './shortcuts.mjs';
 import { readReceipts, writeReceipts } from './receipts.mjs';
 import { sortFiles, buildFileBatch } from './import-batch.mjs';
@@ -20,7 +21,10 @@ let fileError = '';
 let fileReadVersion = 0;
 let validation = null;
 let busy = false;
-let client = new GitHubClient();
+const client = new OwnerClient();
+let accessBusy = false;
+let accessMessage = '';
+let accessGeneration = 0;
 let receipts = readReceipts(storage);
 let selectedReceiptId = receipts[0]?.requestId ?? null;
 let storageAvailable = true;
@@ -167,7 +171,7 @@ function copyPrompt() { copyValue(catalog[themeIndex]?.variations[variationIndex
 
 function updateButtons() {
   const source = inputMode === 'file' ? fileText : $('json-input').value;
-  $('submit-button').disabled = busy || !client.connected || !validation || validation.source !== source;
+  $('submit-button').disabled = busy || accessBusy || !client.connected || !validation || validation.source !== source;
   $('validate-button').disabled = busy || !source.trim();
   for (const id of ['json-input', 'json-file', 'clear-file', 'open-connect', 'disconnect-button']) $(id).disabled = busy;
   all('[data-input-mode]').forEach(button => { button.disabled = busy; });
@@ -470,20 +474,146 @@ function renderActivity() {
   }));
 }
 
-// Imports remain closed until the selected account provider and trusted backend
-// are provisioned. A browser flag or an application password cannot grant access.
 function updateAccessControls() {
-  $('connect-button').disabled = true;
-  $('connect-button-label').textContent = 'Owner sign-in setup pending';
-  $('setup-button').hidden = true;
-  $('disconnect-button').hidden = true;
+  const inOwnerStudio = client.ownerContext;
+  const configured = client.configured;
+  const installationReady = client.installationReady;
+  const authorized = client.authorized;
+  const connected = client.connected;
+  const checked = client.sessionChecked;
+  const needsSetup = inOwnerStudio && checked && (!configured || !installationReady);
+  const waiting = busy || accessBusy;
+  const status = $('connection-status');
+  const panel = $('access-panel');
+
+  $('open-connect').disabled = waiting;
+  $('access-button-label').textContent = 'Owner access';
+  $('connect-title').textContent = 'Owner access';
+  $('access-panel-title').textContent = 'GitHub account access';
+  $('account-access-note').textContent = 'Sign-in happens on GitHub. The importer accepts changes only from budhi-halim.';
+  $('setup-button').hidden = !needsSetup;
+  $('setup-button').disabled = waiting;
+  $('setup-button-label').textContent = configured ? 'Finish GitHub setup' : 'Connect GitHub once';
+  $('disconnect-button').hidden = !inOwnerStudio || !authorized;
+  $('disconnect-button').disabled = waiting;
+  $('connect-button').hidden = inOwnerStudio && authorized;
+  $('connect-button').disabled = waiting || (inOwnerStudio ? !configured || !installationReady || !checked : !client.ownerStudioUrl);
+  $('connect-button-label').textContent = inOwnerStudio ? 'Sign in with GitHub' : 'Open owner studio';
+  $('connect-button').title = inOwnerStudio ? 'Sign in with your GitHub account' : 'Open the owner studio in a new tab';
+
+  let message;
+  if (!inOwnerStudio) {
+    status.textContent = 'Read only';
+    status.dataset.state = 'readonly';
+    panel.dataset.state = client.ownerStudioUrl ? 'pending' : 'error';
+    $('connect-description').textContent = 'Open the owner studio to sign in with GitHub and submit JSON. Browsing and copying stay available here.';
+    $('access-panel-description').textContent = 'The owner studio verifies your GitHub account before accepting imports.';
+    message = client.ownerStudioUrl
+      ? 'The owner studio opens in a new tab. Complete the one-time GitHub setup if prompted, then select your files there. Pasted or selected JSON stays on this page.'
+      : 'Owner sign-in setup is not configured yet. Browsing, copying, and JSON validation remain available.';
+  } else if (accessBusy) {
+    status.textContent = 'Checking account…';
+    status.dataset.state = 'pending';
+    panel.dataset.state = 'pending';
+    $('connect-description').textContent = 'Checking GitHub account access for this owner studio.';
+    $('access-panel-description').textContent = 'The secure importer is checking the current sign-in session.';
+    message = 'Checking account access…';
+  } else if (connected) {
+    status.textContent = 'budhi-halim';
+    status.dataset.state = 'connected';
+    panel.dataset.state = 'ready';
+    $('connect-description').textContent = 'Signed in with GitHub as budhi-halim.';
+    $('access-panel-description').textContent = 'This account can submit validated JSON to the prompt collection.';
+    message = 'Owner access is ready. Close this panel to continue your import.';
+  } else if (needsSetup) {
+    status.textContent = 'Setup required';
+    status.dataset.state = 'pending';
+    panel.dataset.state = 'pending';
+    $('connect-description').textContent = 'Complete the one-time GitHub connection before signing in.';
+    $('access-panel-description').textContent = configured
+      ? 'Finish installing the GitHub App for the seo-yuna repository. Then sign in with GitHub.'
+      : 'Connect GitHub once for this studio. Then use GitHub sign-in on later visits.';
+    message = configured
+      ? 'The GitHub App is configured, but its repository installation is not complete.'
+      : 'GitHub sign-in is not configured yet. Choose Connect GitHub once to set it up.';
+  } else {
+    status.textContent = checked ? 'Signed out' : 'Access unavailable';
+    status.dataset.state = checked ? 'disconnected' : 'error';
+    panel.dataset.state = checked ? 'pending' : 'error';
+    $('connect-description').textContent = 'Sign in with GitHub to submit JSON as budhi-halim.';
+    $('access-panel-description').textContent = 'Sign in first, then choose the JSON files you want to import.';
+    message = checked ? 'Your GitHub account is checked before imports are accepted.' : 'The owner sign-in service could not be verified. Reopen this panel to check again.';
+  }
+  $('connection-message').textContent = accessMessage || message;
+  $('connection-message').dataset.state = accessMessage ? 'error' : connected ? 'success' : 'info';
+}
+
+async function refreshOwnerSession() {
+  if (!client.ownerContext || accessBusy || busy) return;
+  const generation = ++accessGeneration;
+  accessBusy = true;
+  accessMessage = '';
+  updateButtons();
+  try { await client.verifyConnection(); }
+  catch (error) { if (generation === accessGeneration) accessMessage = error.message || 'Owner account access could not be verified.'; }
+  finally {
+    if (generation === accessGeneration) {
+      accessBusy = false;
+      updateButtons();
+      renderActivity();
+      schedulePoll(1000);
+    }
+  }
 }
 
 function openAccess() {
   shortcuts.reset();
+  accessMessage = '';
   updateAccessControls();
-  $('connection-message').textContent = 'Owner sign-in is not configured yet. You can browse, copy, and validate JSON; submitting is disabled until account access is connected.';
-  $('connect-dialog').showModal();
+  if (!$('connect-dialog').open) $('connect-dialog').showModal();
+  if (client.ownerContext && !accessBusy && !busy) void refreshOwnerSession();
+}
+
+function connectOwner() {
+  if (busy || accessBusy) return;
+  if (!client.ownerContext) {
+    if (!client.ownerStudioUrl) { updateAccessControls(); return; }
+    const url = new URL(client.ownerStudioUrl);
+    url.hash = 'import';
+    // A separate tab preserves the JSON selected or pasted in the public reader.
+    window.open(url.href, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  if (client.loginUrl && !client.authorized) {
+    accessBusy = true;
+    updateButtons();
+    window.location.assign(client.loginUrl);
+  }
+}
+
+function setupOwner() {
+  if (busy || accessBusy || !client.ownerContext || !client.sessionChecked || !client.setupUrl || (client.configured && client.installationReady)) return;
+  const form = $('owner-setup-form');
+  form.action = client.setupUrl;
+  accessBusy = true;
+  updateButtons();
+  form.requestSubmit();
+}
+
+async function signOutOwner() {
+  if (busy || accessBusy || !client.ownerContext || !client.authorized) return;
+  accessBusy = true;
+  accessMessage = '';
+  updateButtons();
+  try {
+    await client.logout();
+    window.location.reload();
+  } catch (error) {
+    accessMessage = error.message || 'Sign-out could not be confirmed. Please try again.';
+  } finally {
+    accessBusy = false;
+    updateButtons();
+  }
 }
 
 all('[data-view]').forEach(button => {
@@ -535,6 +665,9 @@ $('drop-zone').addEventListener('drop', event => { if (!busy) acceptFiles(event.
 $('validate-button').addEventListener('click', validateInput);
 $('submit-button').addEventListener('click', submitInput);
 $('open-connect').addEventListener('click', openAccess);
+$('connect-button').addEventListener('click', connectOwner);
+$('setup-button').addEventListener('click', setupOwner);
+$('disconnect-button').addEventListener('click', signOutOwner);
 $('close-connect').addEventListener('click', () => $('connect-dialog').close());
 $('connect-dialog').addEventListener('close', () => shortcuts.reset());
 $('repository-link').href = REPOSITORY_URL;
@@ -550,18 +683,26 @@ $('refresh-activity').addEventListener('click', async () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) clearTimeout(pollTimer);
-  else schedulePoll(1000);
+  else {
+    schedulePoll(1000);
+    if (client.ownerContext && !busy && !accessBusy) void refreshOwnerSession();
+  }
 });
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('hashchange', () => setView(location.hash.slice(1)));
-window.addEventListener('pagehide', () => { client.disconnect(); clearTimeout(pollTimer); });
+window.addEventListener('pagehide', () => { accessGeneration += 1; client.disconnect(); clearTimeout(pollTimer); });
+window.addEventListener('pageshow', event => {
+  if (event.persisted && client.ownerContext) { accessBusy = false; void refreshOwnerSession(); }
+});
 
 setView(location.hash.slice(1));
 setInputMode('paste');
 updateAccessControls();
 renderActivity();
 if (receipts[0]) showSubmission(receipts[0]);
+const accountCheck = client.ownerContext ? refreshOwnerSession() : Promise.resolve();
 try { await loadPublishedCatalog(); }
 catch (error) { $('prompt-output').textContent = error.message || 'The collection could not be loaded. Refresh this page to try again.'; }
+await accountCheck;
 updateButtons();
 schedulePoll(1000);

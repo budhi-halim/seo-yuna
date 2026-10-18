@@ -18,11 +18,11 @@ export class GitHubError extends Error {
 }
 
 function errorMessage(status, headers) {
-  if (status === 401) return 'GitHub did not accept the token. Reconnect with a valid token.';
+  if (status === 401) return 'GitHub access has expired or was revoked. Sign in with GitHub again.';
   if (status === 403 && headers?.get('x-ratelimit-remaining') === '0') {
-    return 'GitHub’s API rate limit has been reached. Wait before refreshing, or connect your token for a higher limit.';
+    return 'GitHub’s API rate limit has been reached. Wait before refreshing.';
   }
-  if (status === 403) return 'GitHub refused this request. The token needs access to seo-yuna with Contents and Actions set to Read and write.';
+  if (status === 403) return 'GitHub refused this request. Check that the Seo Yuna GitHub App has Contents and Actions access to seo-yuna.';
   if (status === 404) return 'GitHub could not find seo-yuna or its workflow with this access. Check the selected repository and that studio.yml is on master.';
   if (status === 409) return 'GitHub reported a repository conflict. Refresh the collection and try again.';
   if (status === 422) return 'GitHub rejected the submission. Check that Actions is enabled and studio.yml is available on master.';
@@ -43,7 +43,8 @@ export class GitHubClient {
 
   constructor(token = '', fetchImpl = globalThis.fetch) {
     this.#token = String(token).trim();
-    this.#fetch = fetchImpl;
+    // Native Window.fetch requires the global receiver, not this client instance.
+    this.#fetch = fetchImpl.bind(globalThis);
   }
 
   get connected() { return this.#token.length > 0; }
@@ -86,7 +87,7 @@ export class GitHubClient {
   }
 
   async verifyConnection() {
-    if (!this.connected) throw new GitHubError('Enter a fine-grained GitHub token to connect.');
+    if (!this.connected) throw new GitHubError('Sign in with GitHub to connect.');
     const [user, repository, workflow] = await Promise.all([
       this.#request('/user'),
       this.#request(REPO_PATH),

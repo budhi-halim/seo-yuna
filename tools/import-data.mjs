@@ -7,7 +7,7 @@ import { CatalogError, MAX_IMPORT_BYTES, parseCatalog, validateCatalog, mergeCat
 
 export const REPOSITORY = 'budhi-halim/seo-yuna';
 export const API_VERSION = '2026-03-10';
-export const MAX_CATALOG_BYTES = 50 * 1024 * 1024;
+export const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
 export const MAX_COMMIT_ATTEMPTS = 4;
 const API_ROOT = 'https://api.github.com/repos/' + REPOSITORY;
 const META_LIMIT = 2 * 1024 * 1024;
@@ -60,7 +60,7 @@ function utf8(bytes) {
 
 function parseStoredCatalog(bytes) {
   if (bytes.byteLength > MAX_CATALOG_BYTES) {
-    throw new ImportError('The complete catalog exceeds the 50 MiB limit.', 'catalog_too_large');
+    throw new ImportError('The complete catalog exceeds the 16 MiB limit.', 'catalog_too_large');
   }
   let catalog;
   try {
@@ -175,7 +175,7 @@ export class GitHubClient {
       throw new ImportError('GitHub returned invalid metadata for data.json.', 'invalid_api_response');
     }
     if (metadata.size > MAX_CATALOG_BYTES) {
-      throw new ImportError('The complete catalog exceeds the 50 MiB limit.', 'catalog_too_large');
+      throw new ImportError('The complete catalog exceeds the 16 MiB limit.', 'catalog_too_large');
     }
     const blobSha = requireSha(metadata.sha, 'Catalog blob SHA');
     // Blob retrieval also supports files above the Contents API inline-content limit.
@@ -189,7 +189,7 @@ export class GitHubClient {
   async update(bytes, blobSha) {
     requireSha(blobSha, 'Previous catalog blob SHA');
     if (bytes.byteLength > MAX_CATALOG_BYTES) {
-      throw new ImportError('The complete catalog would exceed the 50 MiB limit.', 'catalog_too_large');
+      throw new ImportError('The complete catalog would exceed the 16 MiB limit.', 'catalog_too_large');
     }
     const result = await this.request('/contents/data.json', {
       method: 'PUT',
@@ -328,7 +328,7 @@ export async function mergeRemoteCatalog({
     }
     const bytes = Buffer.from(JSON.stringify(result.catalog, null, 2) + '\n', 'utf8');
     if (bytes.byteLength > MAX_CATALOG_BYTES) {
-      throw new ImportError('The complete catalog would exceed the 50 MiB limit.', 'catalog_too_large');
+      throw new ImportError('The complete catalog would exceed the 16 MiB limit.', 'catalog_too_large');
     }
     let commitSha;
     try {

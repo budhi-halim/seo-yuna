@@ -12,7 +12,7 @@ const API_ROOT = 'https://api.github.com';
 const REPO_PATH = `/repos/${REPOSITORY}`;
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
-const MAX_CANONICAL_BYTES = 50 * 1024 * 1024;
+const MAX_CANONICAL_BYTES = 16 * 1024 * 1024;
 const encoder = new TextEncoder();
 
 export class GitHubError extends Error {
@@ -111,6 +111,32 @@ function decodePrivateKey(pem) {
   return wrapped;
 }
 
+async function importSigningKey(pem, cryptoImpl) {
+  let bytes;
+  try {
+    if (typeof pem !== 'string' || pem.length > 32768 || pem.trim().length < 512) {
+      reject('The GitHub App private key is invalid. Reconnect the app.', 503);
+    }
+    bytes = decodePrivateKey(pem.trim());
+    const key = await cryptoImpl.subtle.importKey('pkcs8', bytes,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+    if (key.algorithm.modulusLength < 2048 || key.algorithm.modulusLength > 8192) {
+      reject('The GitHub App key must use RSA with 2048 to 8192 bits. Reconnect the app.', 503);
+    }
+    return key;
+  } catch (error) {
+    if (error instanceof GitHubError) throw error;
+    reject('The stored GitHub App private key could not be used. Reconnect the app.', 503);
+  } finally {
+    bytes?.fill(0);
+  }
+}
+
+/** Validate actual RSA material before storing a new app; no API call or key export occurs. */
+export async function validatePrivateKey(pem, { cryptoImpl = globalThis.crypto } = {}) {
+  await importSigningKey(pem, cryptoImpl);
+}
+
 function errorMessage(status, headers) {
   if (status === 401) return 'GitHub did not accept the app connection. Reconnect the GitHub App.';
   if ((status === 403 || status === 429) && headers?.get('x-ratelimit-remaining') === '0') {
@@ -192,7 +218,7 @@ export class AppGitHubClient {
       reject('The server cannot initialize its GitHub App connection.', 503);
     }
     this.#pem = config.privateKey.trim();
-    this.#fetch = fetchImpl;
+    this.#fetch = fetchImpl.bind(globalThis);
     this.#crypto = cryptoImpl;
     this.#now = now;
     this.#timeout = timeoutMs;
@@ -207,22 +233,9 @@ export class AppGitHubClient {
   async #signingKey() {
     if (!this.#keyPromise) {
       this.#keyPromise = (async () => {
-        let bytes;
-        try {
-          bytes = decodePrivateKey(this.#pem);
-          const key = await this.#crypto.subtle.importKey('pkcs8', bytes,
-            { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
-          if (key.algorithm.modulusLength < 2048 || key.algorithm.modulusLength > 8192) {
-            reject('The GitHub App key must use RSA with 2048 to 8192 bits. Reconnect the app.', 503);
-          }
-          this.#pem = '';
-          return key;
-        } catch (error) {
-          if (error instanceof GitHubError) throw error;
-          reject('The stored GitHub App private key could not be used. Reconnect the app.', 503);
-        } finally {
-          bytes?.fill(0);
-        }
+        const key = await importSigningKey(this.#pem, this.#crypto);
+        this.#pem = '';
+        return key;
       })();
     }
     return this.#keyPromise;

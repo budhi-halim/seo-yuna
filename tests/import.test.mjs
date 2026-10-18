@@ -332,7 +332,7 @@ test('a stored catalog larger than 5 MiB is retrieved via blob and can be extend
   assert.equal(api.putCount, 1);
 });
 
-test('a stored file over 50 MiB is refused before its contents are downloaded', async () => {
+test('a stored file over 16 MiB is refused before its contents are downloaded', async () => {
   let calls = 0;
   const client = new GitHubClient({ token: TOKEN, fetchImpl: async () => {
     calls += 1;

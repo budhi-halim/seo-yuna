@@ -5,6 +5,19 @@ import { GitHubClient, GitHubError, API_VERSION, describeRun, runUrl } from '../
 const receipt = { blobSha: 'a'.repeat(40), digest: 'b'.repeat(64), requestId: 'batch-123' };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('native browser fetch retains its global receiver for anonymous GitHub status requests', async t => {
+  let request;
+  t.mock.method(globalThis, 'fetch', async function (url, init) {
+    assert.equal(this, globalThis, 'Window.fetch must not receive a GitHubClient instance');
+    request = { url, init };
+    return json({ id: 9 });
+  });
+  const client = new GitHubClient();
+  assert.equal((await client.readRun(9)).id, 9);
+  assert.equal(request.url, 'https://api.github.com/repos/budhi-halim/seo-yuna/actions/runs/9');
+  assert.equal(request.init.headers.Authorization, undefined);
+});
+
 test('staging and dispatch stay in seo-yuna; only the blob reference enters workflow inputs', async () => {
   const calls = [];
   const client = new GitHubClient('test-token', async (url, init) => {
