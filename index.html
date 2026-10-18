@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f3f1ec">
+    <meta name="color-scheme" content="light dark">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+    <meta name="description" content="Browse the Seo Yuna prompt collection and submit JSON updates.">
+    <title>Seo Yuna Studio</title>
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="stylesheet" href="assets/style.css">
+    <script type="module" src="assets/app.mjs"></script>
+  </head>
+  <body>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+      <symbol id="icon-left" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+      <symbol id="icon-right" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="icon-github" viewBox="0 0 24 24"><path d="M9 19c-4.3 1.3-4.3-2.2-6-2.7M15 22v-3.9a3.4 3.4 0 0 0-1-2.6c3.3-.4 6.8-1.6 6.8-7.3A5.7 5.7 0 0 0 19.3 4a5.3 5.3 0 0 0-.1-4s-1.3-.4-4.3 1.6a14.8 14.8 0 0 0-7.8 0C4.1-.4 2.8 0 2.8 0A5.3 5.3 0 0 0 2.7 4a5.7 5.7 0 0 0-1.5 4.2c0 5.7 3.5 6.9 6.8 7.3a3.4 3.4 0 0 0-1 2.6V22" transform="translate(2 2) scale(.83)"/></symbol>
+      <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/><path d="m17 17 2 2 3-4"/></symbol>
+      <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5"/></symbol>
+      <symbol id="icon-code" viewBox="0 0 24 24"><path d="m7 7-5 5 5 5m10-10 5 5-5 5M14 4l-4 16"/></symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9"/></symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M11 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/></symbol>
+      <symbol id="icon-keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/></symbol>
+      <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+    </svg>
+
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand" aria-label="Seo Yuna Studio">
+          <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x=".75" y=".75" width="38.5" height="38.5" rx="11"/><path d="M13 12c0 8 3 13 7 16 4-3 7-8 7-16M20 28v5M12 22c5 0 8-4 8-11 0 7 3 11 8 11"/><circle cx="20" cy="7" r="1.5"/></svg>
+          <div class="brand-name">Seo Yuna <span>Studio</span></div>
+        </div>
+
+        <nav class="view-nav" role="tablist" aria-label="Studio views">
+          <button id="tab-prompts" class="nav-button is-active" data-view="prompts" type="button" role="tab" aria-selected="true" aria-controls="view-prompts"><svg class="icon" aria-hidden="true"><use href="#icon-grid"/></svg><span>Prompts</span></button>
+          <button id="tab-import" class="nav-button" data-view="import" type="button" role="tab" aria-selected="false" aria-controls="view-import" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg><span>Add JSON</span></button>
+          <button id="tab-activity" class="nav-button" data-view="activity" type="button" role="tab" aria-selected="false" aria-controls="view-activity" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#icon-activity"/></svg><span>Activity</span></button>
+        </nav>
+
+        <div class="connection-cluster">
+          <span id="connection-status" class="connection-status" data-state="readonly">Read only</span>
+          <button id="open-connect" class="button button-secondary connect-trigger" type="button" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span id="access-button-label">Owner access</span></button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section id="view-prompts" class="view prompts-view" role="tabpanel" aria-labelledby="tab-prompts">
+          <div class="view-heading">
+            <div class="heading-title"><span class="eyebrow">Collection</span><h1>Prompts</h1></div>
+            <div class="collection-counts" aria-label="Collection totals"><span><strong id="theme-count">—</strong> themes</span><span class="count-divider" aria-hidden="true"></span><span><strong id="total-prompts">—</strong> prompts</span></div>
+          </div>
+
+          <div class="selection-grid">
+            <div class="selection-field">
+              <div class="field-heading"><label for="theme-select">Theme</label><div class="field-actions"><button id="copy-theme" class="text-button" type="button" title="Copy theme title with its number (Q)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>Copy title</button><span class="action-divider" aria-hidden="true"></span><button id="copy-theme-name" class="text-button subtle" type="button" title="Copy theme name without its number (Q twice)" disabled>Name only</button></div></div>
+              <div class="select-control"><button id="prev-theme" class="step-button" type="button" aria-label="Previous theme; loops to the last theme" title="Previous theme (A)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-left"/></svg></button><div class="select-wrapper"><select id="theme-select" aria-label="Theme" disabled><option value="">Loading themes…</option></select></div><button id="next-theme" class="step-button" type="button" aria-label="Next theme; loops to the first theme" title="Next theme (D)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-right"/></svg></button></div>
+            </div>
+            <div class="selection-field">
+              <div class="field-heading"><label for="variation-select">Variation</label><div class="field-actions"><button id="copy-variation" class="text-button" type="button" title="Copy variation name" disabled><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>Copy name</button></div></div>
+              <div class="select-control"><button id="prev-variation" class="step-button" type="button" aria-label="Previous variation; loops to the last variation" title="Previous variation (W)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-left"/></svg></button><div class="select-wrapper"><select id="variation-select" aria-label="Variation" disabled><option value="">Loading variations…</option></select></div><button id="next-variation" class="step-button" type="button" aria-label="Next variation; loops to the first variation" title="Next variation (S)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-right"/></svg></button></div>
+            </div>
+          </div>
+
+          <article class="prompt-card">
+            <header class="prompt-header">
+              <div class="prompt-heading"><p id="current-theme-name" class="prompt-theme">Seo Yuna collection</p><h2 id="current-variation-name">Loading your prompts…</h2></div>
+              <div class="prompt-header-actions"><button id="copy-prompt" class="button button-primary" type="button" title="Copy the complete prompt (E)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg><span>Copy prompt</span><kbd aria-hidden="true">E</kbd></button></div>
+            </header>
+            <div class="prompt-reading-area" tabindex="0" role="region" aria-label="Selected prompt"><div id="prompt-output" class="prompt-output">Loading the prompt collection…</div></div>
+            <footer class="prompt-footer"><span class="document-label"><span class="document-dot" aria-hidden="true"></span>Final prompt</span><span class="prompt-meta"><span id="selection-count" class="selection-count" aria-label="Current variation position">— / —</span><span class="prompt-format">Plain text</span></span></footer>
+          </article>
+
+          <div class="shortcuts-bar"><div class="shortcut-list" aria-label="Keyboard shortcuts"><span><kbd>A</kbd><kbd>D</kbd> Themes <span class="loop-symbol" aria-label="loop">↻</span></span><span><kbd>W</kbd><kbd>S</kbd> Variations <span class="loop-symbol" aria-label="loop">↻</span></span><span><kbd>Q</kbd> Title + number</span><span><kbd>Q</kbd><kbd>Q</kbd> Name only</span><span><kbd>E</kbd> Prompt</span></div><button id="open-shortcuts" class="text-button shortcut-help" type="button" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#icon-keyboard"/></svg><span>Shortcuts</span></button></div>
+        </section>
+
+        <section id="view-import" class="view import-view" role="tabpanel" aria-labelledby="tab-import" hidden>
+          <div class="view-heading"><div class="heading-title"><span class="eyebrow">Collection updates</span><h1>Add JSON</h1></div><span class="heading-note">5 MiB total per import</span></div>
+          <div class="import-layout">
+            <section class="panel editor-panel" aria-labelledby="json-editor-title">
+              <header class="panel-header"><div><span class="eyebrow">01 · Input</span><h2 id="json-editor-title">New themes &amp; variations</h2></div><svg class="icon panel-header-icon" aria-hidden="true"><use href="#icon-code"/></svg></header>
+              <div class="input-mode-switch" role="tablist" aria-label="JSON input method"><button id="mode-paste" class="mode-button is-active" type="button" role="tab" aria-selected="true" aria-controls="input-paste" data-input-mode="paste">Paste JSON</button><button id="mode-file" class="mode-button" type="button" role="tab" aria-selected="false" aria-controls="input-file" data-input-mode="file" tabindex="-1">Upload files</button></div>
+              <div id="input-paste" class="input-pane paste-pane" role="tabpanel" aria-labelledby="mode-paste"><label class="visually-hidden" for="json-input">Paste a JSON array of theme objects</label><textarea id="json-input" aria-describedby="json-format-hint" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="[&#10;  {&#10;    &quot;id&quot;: &quot;theme-id&quot;,&#10;    &quot;name&quot;: &quot;Theme name&quot;,&#10;    &quot;variations&quot;: […]&#10;  }&#10;]"></textarea></div>
+              <div id="input-file" class="input-pane file-pane" role="tabpanel" aria-labelledby="mode-file" hidden>
+                <input id="json-file" class="visually-hidden" type="file" accept=".json,application/json" multiple aria-describedby="json-format-hint file-order-note">
+                <label id="drop-zone" class="drop-zone" for="json-file" tabindex="0" role="button"><span class="upload-mark"><svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg></span><strong>Choose JSON files</strong><span>or drop them here</span><span class="file-limit">.json · 5 MiB total per import</span></label>
+                <div id="file-details" class="file-details" hidden>
+                  <div class="file-details-header"><svg class="icon" aria-hidden="true"><use href="#icon-file"/></svg><div class="file-information"><strong id="file-name"></strong><span id="file-size"></span></div><button id="clear-file" class="text-button" type="button">Clear all</button></div>
+                  <p id="file-order-note" class="file-order-note">Files are appended in filename order (1, 2, 10).</p>
+                  <ol id="file-list" class="file-list" role="list" tabindex="0" aria-label="Files in append order" aria-describedby="file-order-note"></ol>
+                </div>
+              </div>
+              <footer class="editor-footer"><p id="json-format-hint">Use a direct array of theme objects: <code>[{ … }]</code></p><button id="validate-button" class="button button-secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg><span>Validate JSON</span></button></footer>
+            </section>
+
+            <aside class="panel review-panel" aria-labelledby="review-title">
+              <header class="panel-header"><div><span class="eyebrow">02 · Review</span><h2 id="review-title">Check &amp; submit</h2></div></header>
+              <div class="review-content"><div id="validation-output" class="validation-output" aria-live="polite"><div class="validation-empty"><svg class="icon" aria-hidden="true"><use href="#icon-file"/></svg><h3>Ready for your JSON</h3><p>Validate the input to see new themes, prompts, duplicates, and conflicts.</p></div></div><div class="submit-area"><button id="submit-button" class="button button-primary button-full" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-github"/></svg><span>Submit to GitHub</span><svg class="icon trailing-icon" aria-hidden="true"><use href="#icon-right"/></svg></button><p class="submit-note">Submit validated JSON from the private owner studio. Uploaded prompt data is public in this repository.</p></div><section id="submission-status" class="submission-status" data-state="idle" aria-live="polite" aria-atomic="true" aria-labelledby="submission-title" hidden><div class="submission-status-heading"><span class="status-indicator" aria-hidden="true"></span><h3 id="submission-title">Saving your JSON…</h3></div><progress id="submission-progress" aria-label="Submission progress" max="100"></progress><p id="submission-detail">Preparing the submission.</p><div id="submission-links" class="submission-links"></div><p id="safe-to-close" class="safe-to-close" data-safe="false">Keep this tab open until the file is saved.</p></section></div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="view-activity" class="view activity-view" role="tabpanel" aria-labelledby="tab-activity" hidden>
+          <div class="view-heading"><div class="heading-title"><span class="eyebrow">Submissions</span><h1>Activity</h1></div><button id="refresh-activity" class="button button-secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>Refresh</span></button></div>
+          <section class="panel activity-panel" aria-label="Submission history"><div class="activity-column-head" aria-hidden="true"><span>Update</span><span>Run status</span></div><div id="activity-list" class="activity-list" aria-live="polite"><div class="empty-state"><span class="empty-state-mark"><svg class="icon" aria-hidden="true"><use href="#icon-activity"/></svg></span><h2>No submissions yet</h2><p>Updates submitted from this browser appear here.</p></div></div></section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="connect-dialog" class="studio-dialog owner-access-dialog" aria-labelledby="connect-title" aria-describedby="connect-description">
+      <div class="dialog-header"><span class="dialog-icon"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg></span><button id="close-connect" class="icon-button" type="button" aria-label="Close owner access"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
+      <h2 id="connect-title">Owner access</h2>
+      <p id="connect-description" class="dialog-description">Sign in to the private owner studio to submit JSON. Browsing and copying stay available here.</p>
+      <section id="access-panel" class="account-access-panel" aria-labelledby="access-panel-title">
+        <h3 id="access-panel-title">Owner account access</h3>
+        <p id="access-panel-description">The secure importer checks the authorized owner account before accepting changes.</p>
+        <p id="account-access-note" class="account-access-note">Owner imports use account verification. No app password or pasted token.</p>
+      </section>
+      <div class="repository-scope"><span>Prompt repository</span><a id="repository-link" href="https://github.com/budhi-halim/seo-yuna" target="_blank" rel="noopener noreferrer">budhi-halim/seo-yuna<svg class="icon" aria-hidden="true"><use href="#icon-external"/></svg></a></div>
+      <div id="connection-message" class="connection-message" role="status" aria-live="polite">Owner sign-in setup is not configured yet.</div>
+      <div class="dialog-actions"><button id="disconnect-button" class="button button-secondary" type="button" hidden>Sign out</button><button id="setup-button" class="button button-secondary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-github"/></svg><span>Connect GitHub once</span></button><button id="connect-button" class="button button-primary" type="button"><span id="connect-button-label">Open owner studio</span><svg class="icon" aria-hidden="true"><use href="#icon-right"/></svg></button></div>
+    </dialog>
+
+    <dialog id="shortcuts-dialog" class="studio-dialog shortcuts-dialog" aria-labelledby="shortcuts-title"><div class="dialog-header"><span class="dialog-icon"><svg class="icon" aria-hidden="true"><use href="#icon-keyboard"/></svg></span><button id="close-shortcuts" class="icon-button" type="button" aria-label="Close keyboard shortcuts"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p class="dialog-description">Available in Prompts when you are not editing an input.</p><dl class="shortcut-definitions"><div><dt>Previous / next theme</dt><dd><kbd>A</kbd><kbd>D</kbd></dd></div><div><dt>Previous / next variation</dt><dd><kbd>W</kbd><kbd>S</kbd></dd></div><div><dt>Copy theme with number</dt><dd><kbd>Q</kbd></dd></div><div><dt>Copy theme name only</dt><dd><kbd>Q</kbd><kbd>Q</kbd></dd></div><div><dt>Copy prompt</dt><dd><kbd>E</kbd></dd></div></dl><p class="field-help">Theme and variation navigation loops at either end. Press Q twice in quick succession to copy the name without its number.</p></dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <noscript><div class="noscript-message">Enable JavaScript to browse prompts and submit JSON updates.</div></noscript>
+  </body>
+</html>

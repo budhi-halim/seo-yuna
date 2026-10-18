@@ -1,0 +1,60 @@
+THE SEO YUNA PROMPT ARCHITECTURE RULEBOOK
+1. THE IMMUTABLE CORE (CHARACTER ANCHOR)
+
+Subject Traits: The prompt must always explicitly establish the character: a beautiful Asian woman, white skin tone, long dark brown hair, and a "svelte and subtly toned" physique.
+
+Banned Modifiers: Never use vague or verbose descriptions for the body. Stick strictly to the established core description.
+
+2. BIOMECHANICS & POSE LOGIC (CRITICAL FOR REALISM)
+
+Spinal & Neck Alignment: Never instruct the subject to look over her shoulder if her back is entirely facing the camera. The chest and head must orient within a natural, comfortable rotational limit (maximum 45-degree difference).
+
+Weight Distribution: Always explicitly state how the subject is supporting herself against gravity. (e.g., "Her body weight rests on her right forearm leaning against the table," or "Her left leg is straight and bearing her weight").
+
+Limb Grounding: There must be zero floating limbs. Every hand, arm, and leg must be explicitly described as resting on, holding, or interacting with a specific physical object or part of her own body.
+
+Action & Fluidity: Describe poses as mid-action or comfortably settled. Avoid rigid, perfectly symmetrical military postures unless explicitly requested for an edgy look.
+
+3. GAZE & FACIAL EXPRESSION
+
+Focal Point: The eyes must always have a defined target. She must be looking "directly into the camera lens," "down at the object in her hands," or "at a specific off-camera focal point (e.g., toward the bright window)." Never leave the gaze ambiguous.
+
+Expression: Match the expression to the environment (e.g., a confident smirk, a serene gaze, a fierce look). Avoid blank or vacant stares.
+
+4. LIGHTING & ILLUMINATION CONSTRAINTS
+
+Banned Setup: NEVER place the primary light source (especially the sun) directly behind the subject's back or head. This causes flat silhouettes and ruins facial detailing.
+
+HDR & Studio Quality: Always enforce "Studio-quality High Dynamic Range (HDR) lighting."
+
+The 3-Point System: Every prompt must define how light hits the subject:
+
+Key Light: The main light source (e.g., soft golden hour sun from the side, a neon sign in front of her).
+
+Rim/Hair Light: A secondary light catching the edge of her hair/shoulder to separate her from the background.
+
+Shadows: Describe the shadow quality based on the environment (e.g., soft diffused shadows for dry daylight, stark geometric shadows for architectural shots).
+
+Material Interaction: Describe how the light reacts to her clothing and environment (e.g., sharp specular highlights on leather/wet surfaces, soft glowing diffusion on silk/skin).
+
+5. ENVIRONMENTAL INTERACTION & STAGING
+
+Integration: The subject must exist within the environment, not just pasted on top of it. Use depth cues. What is in the foreground (blurred)? What is she touching? What is deep in the background?
+
+Atmosphere: Include volumetric descriptors (e.g., floating dust motes in sunlight, atmospheric fog, rain, lens flares) to give the air texture.
+
+6. CAMERA & COMPOSITION
+
+Framing: Explicitly define the crop (e.g., Extreme Close-up, Half-body waist-up, Medium-full shot, Full-body).
+
+Lens & Depth: Specify the lens to dictate depth of field (e.g., 35mm for wide environmental context, 85mm portrait lens for heavy background blur/bokeh).
+
+Angle: Define the camera angle (e.g., strict eye-level, slight low-angle for power, high-angle looking down).
+
+7. LANGUAGE RULES
+
+Objective Reality: Write in concrete, physical, and highly descriptive natural English.
+
+No Metaphors: Do not use poetic or emotional language to describe the scene (e.g., instead of "a sad room," use "a dimly lit room with cool, blue ambient shadows").
+
+No Meta-Tags: Do not use prompt-salad tags like "masterpiece," "8k," "trending on artstation," or "best quality." Rely purely on the high-fidelity descriptive text to generate the quality.

@@ -1,0 +1,95 @@
+name: Seo Yuna Studio
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.request_id != '' && format('Import {0}', inputs.request_id) || 'Publish Seo Yuna' }}
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      payload_blob_sha:
+        description: 'Uploaded Git blob SHA; leave all inputs empty to publish only'
+        required: false
+        type: string
+      request_id:
+        description: 'Unique request identifier from the website'
+        required: false
+        type: string
+      sha256:
+        description: 'SHA-256 checksum of the uploaded JSON bytes'
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: seo-yuna-write-and-deploy
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  studio:
+    name: Catalog and website
+    if: >-
+      github.repository == 'budhi-halim/seo-yuna' &&
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.actor == 'budhi-halim'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out current master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Validate JSON batch
+        id: validation
+        run: node tools/import-data.mjs validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge into data.json
+        id: merge
+        if: steps.validation.outputs.import_requested == 'true'
+        run: node tools/import-data.mjs merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check out saved catalog commit
+        if: steps.merge.outputs.commit_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.merge.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Build website
+        id: build
+        run: node tools/build-site.mjs
+        env:
+          BUILD_SHA: ${{ steps.merge.outputs.commit_sha }}
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload website
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ./_site
+
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
