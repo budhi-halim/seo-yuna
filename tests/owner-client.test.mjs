@@ -1,273 +1,379 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OwnerClient, OwnerAccessError, isOwnerStudioContext, OWNER_STUDIO_URL } from '../assets/owner-client.mjs';
+import { webcrypto } from 'node:crypto';
+import { OwnerClient, OwnerAccessError } from '../assets/owner-client.mjs';
+import { CredentialVault, CredentialVaultError, VAULT_STORAGE_KEY } from '../assets/credential-vault.mjs';
+import { OWNER, OWNER_ID, REPOSITORY_ID, WORKFLOW_PATH } from '../assets/github.mjs';
 
-const studio = 'https://owner.example.test/studio';
-const now = Date.parse('2026-10-18T12:00:00Z');
-const csrf = 'test-csrf-'.padEnd(43, 'x');
-const session = { authorized: true, configured: true, login: 'budhi-halim', csrfToken: csrf, expiresAt: '2026-10-18T13:00:00Z', installationReady: true };
-const receipt = { blobSha: 'a'.repeat(40), digest: 'b'.repeat(64), requestId: '12345678-1234-4123-8123-123456789abc' };
-const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
-const owner = fetchImpl => new OwnerClient({ ownerStudioUrl: studio, location: studio, now: () => now, fetchImpl });
-
-test('native browser fetch retains the global receiver during owner boot and public status reads', async t => {
+const token = `github_pat_${'A'.repeat(80)}`;
+const secondToken = `github_pat_${'B'.repeat(80)}`;
+const username = 'local tea cup';
+const password = 'a local password of my own';
+const receipt = { blobSha: 'a'.repeat(40), digest: 'b'.repeat(64), requestId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' };
+const user = { id: OWNER_ID, login: OWNER };
+const repository = { id: REPOSITORY_ID, full_name: 'budhi-halim/seo-yuna', owner: user,
+  default_branch: 'master', permissions: { push: true } };
+const workflow = { id: 17, path: WORKFLOW_PATH, state: 'active' };
+const json = (value, status = 200, headers = {}) => new Response(JSON.stringify(value), { status,
+  headers: { 'Content-Type': 'application/json', ...headers } });
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+function storage() {
+  const values = new Map();
+  return { values, getItem: key => values.get(key) ?? null, setItem(key, value) { values.set(key, value); }, removeItem(key) { values.delete(key); } };
+}
+function fakeVault({ configured = false, available = true, error = null, load, save, unlock, forget } = {}) {
+  return { configured, available, error, saves: [], cancellations: 0,
+    async load() { return load ? load.call(this) : { configured: this.configured, available: this.available }; },
+    async save(...args) { this.saves.push(args); if (save) return save.apply(this, args); this.configured = true; },
+    async unlock(...args) { if (unlock) return unlock.apply(this, args); return token; },
+    cancel() { this.cancellations += 1; },
+    forget() { if (forget) return forget.call(this); this.configured = false; this.error = null; },
+  };
+}
+function fixture({ handler = () => undefined, vault, savedStorage = storage(), cryptoImpl = webcrypto, lifecycleTarget, timeoutMs, uploadTimeoutMs } = {}) {
   const calls = [];
-  t.mock.method(globalThis, 'fetch', async function (url, init) {
-    assert.equal(this, globalThis, 'Window.fetch must not receive a client instance');
+  const fetchImpl = async function (url, init) {
+    assert.equal(this, globalThis);
+    assert.equal(new URL(url).origin, 'https://api.github.com');
     calls.push({ url, init });
-    return url.endsWith('/session')
-      ? json({ authorized: false, configured: false, installationReady: false })
-      : json({ id: 9 });
-  });
-  const client = new OwnerClient({ ownerStudioUrl: studio, location: studio, now: () => now });
-  const result = await client.verifyConnection();
-  assert.equal(result.authorized, false);
-  assert.equal(client.sessionChecked, true);
-  assert.equal(client.configured, false);
-  assert.equal(client.setupUrl, 'https://owner.example.test/api/owner/setup');
-  assert.equal((await client.readRun(9)).id, 9);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].init.credentials, 'same-origin');
-  assert.ok(calls[1].url.startsWith('https://api.github.com/repos/budhi-halim/seo-yuna/'));
-  assert.equal(calls[1].init.headers.Authorization, undefined);
-});
+    const response = await handler(url, init);
+    if (response !== undefined) return response;
+    if (url.endsWith('/user')) return json(user);
+    if (url === 'https://api.github.com/repos/budhi-halim/seo-yuna') return json(repository);
+    if (url.endsWith('/actions/workflows/studio.yml')) return json(workflow);
+    if (url.includes('/contents/data.json?')) return new Response('[]');
+    if (url.endsWith('/git/blobs')) return json({ sha: receipt.blobSha }, 201);
+    if (url.endsWith('/dispatches')) return json({ workflow_run_id: 42 });
+    if (url.includes('/jobs?')) return json({ jobs: [] });
+    if (url.includes('/studio.yml/runs?')) return json({ workflow_runs: [] });
+    return json({ id: Number(new URL(url).pathname.split('/').at(-1)) });
+  };
+  return { client: new OwnerClient({ fetchImpl, storage: savedStorage, cryptoImpl, vault, lifecycleTarget,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(uploadTimeoutMs === undefined ? {} : { uploadTimeoutMs }) }), calls, savedStorage };
+}
 
-test('only the deployed HTTPS origin and exact studio path enable owner API access', () => {
-  assert.equal(OWNER_STUDIO_URL, 'https://seo-yuna-owner.halimbudhiarto.chatgpt.site/studio');
-  assert.equal(isOwnerStudioContext(`${studio}#import`, studio), true);
-  for (const location of ['https://public.example.test/studio', 'https://owner.example.test/', `${studio}/`, 'https://owner.example.test/studio.htm', 'https://owner.example.test.evil/studio']) {
-    assert.equal(isOwnerStudioContext(location, studio), false, location);
-  }
-  for (const config of ['', 'http://owner.example.test/studio', `${studio}?next=elsewhere`, `${studio}#import`, 'https://user:secret@owner.example.test/studio', 'https://owner.example.test/not-studio.html']) {
-    assert.equal(isOwnerStudioContext(studio, config), false, config);
-  }
-});
-
-test('public mode never probes owner sessions or allows a write', async () => {
-  let calls = 0;
-  const client = new OwnerClient({ ownerStudioUrl: studio, location: 'https://budhi-halim.github.io/seo-yuna/', fetchImpl: async () => { calls += 1; assert.fail('must not fetch'); } });
-  assert.equal((await client.verifyConnection()).authorized, false);
-  assert.equal(client.ownerContext, false);
+test('initialization reads local state without probing any account or sending credentials', async () => {
+  const { client, calls } = fixture();
   assert.equal(client.connected, false);
-  assert.equal(client.loginUrl, '');
-  assert.equal(client.setupUrl, '');
-  assert.throws(() => { client.connected = true; }, TypeError);
-  await assert.rejects(client.stageBlob('[]'), error => error.status === 403);
-  await assert.rejects(client.dispatch(receipt), error => error.status === 403);
-  assert.equal(calls, 0);
-});
-
-test('a verified owner session keeps CSRF private and sends it only to fixed same-origin mutations', async () => {
-  const calls = [];
-  const client = owner(async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith('/session')) return json(session);
-    if (url.endsWith('/catalog')) return new Response('[]');
-    if (url.endsWith('/stage')) return json({ sha: receipt.blobSha });
-    return json({ accepted: true, runId: 42 });
-  });
-  const verified = await client.verifyConnection();
-  assert.equal(client.connected, true);
-  assert.equal(client.login, 'budhi-halim');
-  assert.equal(client.loginUrl, 'https://owner.example.test/api/owner/auth/login');
-  assert.equal(client.setupUrl, 'https://owner.example.test/api/owner/setup/install');
-  assert.equal(verified.csrfToken, undefined);
+  assert.deepEqual(await client.initialize(), { configured: false, storageAvailable: true, storageError: '', connected: false, authorized: false, login: null });
+  assert.equal(calls.length, 0);
   assert.deepEqual(Object.keys(client), []);
   assert.equal(JSON.stringify(client), '{}');
-  assert.equal(await client.readCanonical(), '[]');
-  assert.equal(await client.stageBlob('[{"literal":"<script>"}]'), receipt.blobSha);
-  assert.deepEqual(await client.dispatch({ ...receipt, detail: 'discard this extra property' }), { accepted: true, runId: 42 });
-  for (const { url, init } of calls) {
-    assert.ok(url.startsWith('https://owner.example.test/api/owner/'));
-    assert.equal(init.credentials, 'same-origin');
-    assert.equal(init.redirect, 'error');
-    assert.equal(init.cache, 'no-store');
-    assert.equal(init.headers.Authorization, undefined);
-    assert.equal(init.headers['X-CSRF-Token'], init.method === 'POST' ? csrf : undefined);
-    assert.equal(url.includes(csrf), false);
-  }
-  assert.equal(calls[2].init.body, '[{"literal":"<script>"}]');
-  assert.deepEqual(JSON.parse(calls[3].init.body), receipt);
+  assert.throws(() => { client.connected = true; }, TypeError);
+  await assert.rejects(client.stageBlob('[]'), error => error instanceof OwnerAccessError && error.status === 401);
+  await assert.rejects(client.dispatch(receipt), error => error.status === 401 && !error.uncertain);
+  assert.equal(calls.length, 0);
 });
 
-test('signed-out 401 is a normal state while configured metadata remains available', async () => {
-  const client = owner(async () => json({ authorized: false, configured: true, installationReady: true }, 401));
-  assert.equal((await client.verifyConnection()).authorized, false);
-  assert.equal(client.sessionChecked, true);
+test('real encrypted setup verifies GitHub first and the two strings never reach a network request', async () => {
+  const savedStorage = storage();
+  const { client, calls } = fixture({ savedStorage, handler: () => {
+    assert.equal(savedStorage.getItem(VAULT_STORAGE_KEY), null, 'verification precedes persistence');
+  } });
+  await client.initialize();
+  const result = await client.configure(username, password, token);
+  assert.equal(result.connected, true);
+  assert.equal(result.configured, true);
+  assert.equal(result.login, OWNER);
+  assert.equal(client.authorized, true);
+  assert.equal(calls.length, 3);
+  const encrypted = savedStorage.getItem(VAULT_STORAGE_KEY);
+  assert.ok(encrypted);
+  for (const secret of [username, password, token]) assert.equal(encrypted.includes(secret), false);
+  assert.equal(JSON.stringify(result).includes(token), false);
+  for (const { url, init } of calls) {
+    assert.equal(init.headers.Authorization, `Bearer ${token}`);
+    assert.equal(init.credentials, 'omit'); assert.equal(init.redirect, 'manual');
+    const request = JSON.stringify({ url, ...init });
+    assert.equal(request.includes(username), false); assert.equal(request.includes(password), false);
+    assert.equal(url.includes(token), false);
+    assert.equal(init.body, undefined);
+  }
+  assert.deepEqual(Object.keys(client), []);
+});
+
+test('a new instance starts locked, unlock verifies the token again, and logout is entirely local', async () => {
+  const savedStorage = storage();
+  const vault = new CredentialVault({ storage: savedStorage, cryptoImpl: webcrypto });
+  await vault.save(username, password, token);
+  const encrypted = savedStorage.getItem(VAULT_STORAGE_KEY);
+  const { client, calls } = fixture({ savedStorage });
+  assert.equal(client.connected, false);
+  await client.initialize();
   assert.equal(client.configured, true);
   assert.equal(client.connected, false);
-  assert.equal(client.login, null);
-  const empty = owner(async () => new Response(null, { status: 401 }));
-  await empty.verifyConnection();
-  assert.equal(empty.configured, false);
-  assert.equal(empty.connected, false);
-});
-
-test('malformed, wrong-owner, expired, or incomplete authorization fails closed', async () => {
-  const badSessions = [null, [], {}, { ...session, authorized: 'true' }, { ...session, configured: 'true' },
-    { ...session, login: 'someone-else' }, { ...session, csrfToken: 'short' }, { ...session, csrfToken: 'x'.repeat(40) + '\n' },
-    { ...session, expiresAt: '2026-10-18T11:59:59Z' }, { ...session, expiresAt: 'invalid' }, { ...session, installationReady: 'true' },
-    { ...session, configured: undefined }, { ...session, installationReady: undefined }];
-  for (const bad of badSessions) {
-    const client = owner(async () => json(bad));
-    await assert.rejects(client.verifyConnection(), OwnerAccessError);
-    assert.equal(client.connected, false);
-    assert.equal(client.authorized, false);
-  }
-  const false401 = owner(async () => json(session, 401));
-  await assert.rejects(false401.verifyConnection(), OwnerAccessError);
-  assert.equal(false401.connected, false);
-});
-
-test('an authenticated account cannot write before app configuration and installation are ready', async () => {
-  for (const incomplete of [{ ...session, configured: false }, { ...session, installationReady: false }]) {
-    const client = owner(async () => json(incomplete));
-    await client.verifyConnection();
-    assert.equal(client.authorized, true);
-    assert.equal(client.connected, false);
-    assert.equal(client.loginUrl, '');
-    assert.equal(client.setupUrl, incomplete.configured ? 'https://owner.example.test/api/owner/setup/install' : 'https://owner.example.test/api/owner/setup');
-    await assert.rejects(client.stageBlob('[]'), /Complete the GitHub connection/);
-  }
-});
-
-test('server epoch-millisecond expiries are accepted without exposing CSRF', async () => {
-  const client = owner(async () => json({ ...session, expiresAt: Date.parse(session.expiresAt) }));
-  const verified = await client.verifyConnection();
+  assert.equal(calls.length, 0);
+  await client.unlock(username, password);
+  assert.equal(calls.length, 3);
   assert.equal(client.connected, true);
-  assert.equal(verified.expiresAt, '2026-10-18T13:00:00.000Z');
-  assert.equal(verified.csrfToken, undefined);
-});
-
-test('session expiry and page-context changes immediately close the write path', async () => {
-  let clock = now;
-  const location = { href: studio };
-  const client = new OwnerClient({ ownerStudioUrl: studio, location, now: () => clock, fetchImpl: async () => json(session) });
-  await client.verifyConnection();
-  assert.equal(client.connected, true);
-  clock = Date.parse(session.expiresAt);
-  assert.equal(client.connected, false);
-  clock = now;
-  location.href = 'https://owner.example.test/';
-  assert.equal(client.connected, false);
-  await assert.rejects(client.dispatch(receipt), /configured owner studio/);
-});
-
-test('a stale session response cannot reconnect after local disconnect', async () => {
-  let resolve;
-  const client = owner(() => new Promise(done => { resolve = done; }));
-  const verification = client.verifyConnection();
-  client.disconnect();
-  resolve(json(session));
-  await verification;
-  assert.equal(client.connected, false);
+  assert.equal(client.login, OWNER);
+  assert.equal(savedStorage.getItem(VAULT_STORAGE_KEY), encrypted);
+  const signedOut = client.logout();
+  assert.equal(signedOut.connected, false);
+  assert.equal(client.authorized, false);
   assert.equal(client.login, null);
+  assert.equal(calls.length, 3, 'logout has no network request');
+  assert.equal(client.configured, true);
+  assert.equal(savedStorage.getItem(VAULT_STORAGE_KEY), encrypted);
+  await client.readCanonical();
+  assert.equal(calls.at(-1).init.headers.Authorization, undefined);
 });
 
-test('network loss during dispatch is uncertain, redacted, and never replayed', async () => {
-  let dispatches = 0;
-  const client = owner(async url => {
-    if (url.endsWith('/session')) return json(session);
-    dispatches += 1;
-    throw new Error('upstream secret browser-cookie client-secret');
+test('wrong local strings leave encrypted setup intact and make no GitHub request', async () => {
+  const savedStorage = storage();
+  await new CredentialVault({ storage: savedStorage, cryptoImpl: webcrypto }).save(username, password, token);
+  const encrypted = savedStorage.getItem(VAULT_STORAGE_KEY);
+  const { client, calls } = fixture({ savedStorage });
+  await client.initialize();
+  for (const pair of [[username.toUpperCase(), password], [username, `${password}!`]]) {
+    await assert.rejects(client.unlock(...pair), error => error instanceof OwnerAccessError && error.status === 401 &&
+      !error.message.includes(token) && !error.message.includes(pair[0]));
+    assert.equal(client.connected, false);
+    assert.equal(client.configured, true);
+    assert.equal(savedStorage.getItem(VAULT_STORAGE_KEY), encrypted);
+  }
+  assert.equal(calls.length, 0);
+});
+
+for (const [name, path, value] of [['another owner', '/user', { ...user, id: 2, login: 'visitor' }],
+  ['recreated repository', '/repos/budhi-halim/seo-yuna', { ...repository, id: 2 }],
+  ['unconfirmed write access', '/repos/budhi-halim/seo-yuna', { ...repository, permissions: {} }],
+  ['another workflow', '/actions/workflows/studio.yml', { ...workflow, path: '.github/workflows/other.yml' }]]) {
+  test(`configure never persists a token for ${name}`, async () => {
+    const vault = fakeVault();
+    const { client } = fixture({ vault, handler: url => new URL(url).pathname.endsWith(path) ? json(value) : undefined });
+    await assert.rejects(client.configure(username, password, token), OwnerAccessError);
+    assert.equal(vault.saves.length, 0);
+    assert.equal(client.connected, false);
+    assert.equal(client.configured, false);
   });
-  await client.verifyConnection();
-  await assert.rejects(client.dispatch(receipt), error => error instanceof OwnerAccessError && error.uncertain && !error.message.includes('secret'));
-  assert.equal(dispatches, 1);
-});
+}
 
-test('acceptance stays unknown for missing or malformed responses; a confirmed runless acceptance is recoverable', async () => {
-  for (const response of [new Response(null, { status: 204 }), new Response('bad secret json'), json({ accepted: 'true', runId: 1 })]) {
-    const client = owner(async url => url.endsWith('/session') ? json(session) : response);
-    await client.verifyConnection();
-    await assert.rejects(client.dispatch(receipt), error => error.uncertain && !error.message.includes('secret'));
+test('local input and token validation reject invalid setup before network or persistence', async () => {
+  const vault = fakeVault();
+  const { client, calls } = fixture({ vault });
+  for (const values of [['', password, token], [username, 'short', token], [username, password, 'ghp_broad'],
+    [username, password, `${token}\n`], [username, 'a'.repeat(1025), token]]) {
+    await assert.rejects(client.configure(...values), error => error instanceof OwnerAccessError && !error.uncertain);
   }
-  const client = owner(async url => url.endsWith('/session') ? json(session) : json({ accepted: true, runId: 'javascript:bad' }));
-  await client.verifyConnection();
-  assert.deepEqual(await client.dispatch(receipt), { accepted: true, runId: null });
+  assert.equal(calls.length, 0);
+  assert.equal(vault.saves.length, 0);
 });
 
-test('definite rejections do not expose upstream bodies or remain connected after authorization failure', async () => {
-  const client = owner(async url => url.endsWith('/session') ? json(session) : json({ message: 'secret private response' }, 403));
-  await client.verifyConnection();
-  await assert.rejects(client.dispatch(receipt), error => error.status === 403 && !error.uncertain && !error.message.includes('secret'));
+test('storage failure after verification leaves the browser locked and does not erase old setup', async () => {
+  const vault = fakeVault({ configured: true, save() { this.error = new CredentialVaultError('storage_unavailable'); throw this.error; } });
+  const { client, calls } = fixture({ vault });
+  await assert.rejects(client.configure(username, password, token), OwnerAccessError);
+  assert.equal(calls.length, 3);
+  assert.equal(client.configured, true);
   assert.equal(client.connected, false);
-  const unavailable = owner(async url => url.endsWith('/session') ? json(session) : json({ message: 'secret response' }, 502));
-  await unavailable.verifyConnection();
-  await assert.rejects(unavailable.dispatch(receipt), error => error.uncertain && !error.message.includes('secret'));
+  assert.ok(client.storageError);
+  await client.readCanonical();
+  assert.equal(calls.at(-1).init.headers.Authorization, undefined);
 });
 
-test('explicit server uncertainty is preserved for 409 and definite 5xx errors without leaking error text', async () => {
-  for (const [status, uncertain] of [[409, true], [502, false]]) {
-    const client = owner(async url => url.endsWith('/session') ? json(session) : json({ error: 'secret upstream body', code: 'secret code', uncertain }, status));
-    await client.verifyConnection();
-    await assert.rejects(client.dispatch(receipt), error => error.status === status && error.uncertain === uncertain && !error.message.includes('secret'));
+test('an invalid or revoked decrypted token never becomes an active connection', async () => {
+  for (const [unlocked, status] of [['ghp_broad', 200], [token, 401]]) {
+    const vault = fakeVault({ configured: true, unlock: async () => unlocked });
+    const { client, calls } = fixture({ vault, handler: url => url.endsWith('/user') ? json({ message: token }, status) : undefined });
+    await assert.rejects(client.unlock(username, password), error => error instanceof OwnerAccessError && !error.message.includes(token));
+    assert.equal(client.connected, false);
+    assert.equal(client.configured, true);
+    assert.equal(calls.length, status === 401 ? 1 : 0);
   }
 });
 
-test('redirected response adapters cannot establish owner authorization', async () => {
-  const response = json(session);
-  Object.defineProperty(response, 'url', { value: 'https://other.example.test/api/owner/session' });
-  const client = owner(async () => response);
-  await assert.rejects(client.verifyConnection(), /untrusted redirect/);
+test('late verification cannot save or reconnect after logout, even if fetch ignores cancellation', async () => {
+  const waiting = deferred();
+  const vault = fakeVault();
+  const { client, calls } = fixture({ vault, handler: url => url.endsWith('/user') ? waiting.promise : undefined });
+  const setup = client.configure(username, password, token);
+  const rejected = assert.rejects(setup, /cancelled/);
+  client.logout();
+  await rejected;
+  waiting.resolve(json(user));
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(client.connected, false);
+  assert.equal(vault.saves.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.signal.aborted, true);
 });
 
-test('run status uses authenticated server paths for the owner and anonymous GitHub for public readers', async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith('/session')) return json(session);
-    if (url.includes('/runs?')) return json(null);
-    return json({ id: 9, jobs: [] });
-  };
-  const client = owner(fetchImpl);
-  await client.verifyConnection();
-  await client.readRun(9); await client.readJobs(9); await client.findRun(receipt.requestId, '2026-10-18T12:00:00Z');
-  assert.equal(calls[1].url, 'https://owner.example.test/api/owner/runs/9');
-  assert.equal(calls[2].url, 'https://owner.example.test/api/owner/runs/9/jobs');
-  assert.equal(new URL(calls[3].url).searchParams.get('request_id'), receipt.requestId);
+test('late decryption cannot begin verification or reconnect after forget', async () => {
+  const waiting = deferred();
+  const vault = fakeVault({ configured: true, unlock: () => waiting.promise });
+  const { client, calls } = fixture({ vault });
+  const unlock = client.unlock(username, password);
+  const rejected = assert.rejects(unlock, /cancelled/);
+  client.forget();
+  waiting.resolve(token);
+  await rejected;
+  assert.equal(client.connected, false);
+  assert.equal(client.configured, false);
+  assert.equal(calls.length, 0);
+});
+
+for (const action of ['logout', 'forget', 'pagehide']) {
+  test(`${action} during real encryption prevents a stale encrypted save and connection`, async () => {
+    const started = deferred();
+    const release = deferred();
+    const lifecycleTarget = new EventTarget();
+    const cryptoImpl = { getRandomValues: webcrypto.getRandomValues.bind(webcrypto), subtle: {
+      importKey: webcrypto.subtle.importKey.bind(webcrypto.subtle), deriveKey: webcrypto.subtle.deriveKey.bind(webcrypto.subtle),
+      decrypt: webcrypto.subtle.decrypt.bind(webcrypto.subtle), async encrypt(...args) {
+        started.resolve(); await release.promise; return webcrypto.subtle.encrypt(...args);
+      },
+    } };
+    const { client, savedStorage } = fixture({ cryptoImpl, lifecycleTarget });
+    const setup = client.configure(username, password, token);
+    const rejected = assert.rejects(setup, /cancelled/);
+    await started.promise;
+    if (action === 'pagehide') lifecycleTarget.dispatchEvent(new Event('pagehide')); else client[action]();
+    release.resolve();
+    await rejected;
+    assert.equal(savedStorage.getItem(VAULT_STORAGE_KEY), null);
+    assert.equal(client.connected, false);
+    assert.equal(client.configured, false);
+  });
+}
+
+test('an older login operation cannot overwrite or disconnect a newer connection', async () => {
+  const waiting = deferred();
+  const vault = fakeVault({ configured: true, unlock: () => waiting.promise });
+  const { client, calls } = fixture({ vault });
+  const old = client.unlock(username, password);
+  const rejected = assert.rejects(old, /cancelled/);
+  await client.configure(username, password, secondToken);
+  waiting.resolve(token);
+  await rejected;
+  assert.equal(client.connected, true);
+  assert.equal(vault.saves.length, 1);
+  assert.equal(vault.saves[0][2], secondToken);
+  assert.equal(calls.every(call => call.init.headers.Authorization === `Bearer ${secondToken}`), true);
+});
+
+test('a newer configure cancels older verification and only the newer token is saved', async () => {
+  const waiting = deferred();
+  const vault = fakeVault();
+  const { client, calls } = fixture({ vault, handler: (url, init) =>
+    url.endsWith('/user') && init.headers.Authorization === `Bearer ${token}` ? waiting.promise : undefined });
+  const old = client.configure(username, password, token);
+  const rejected = assert.rejects(old, /cancelled/);
+  await client.configure(username, password, secondToken);
+  await rejected;
+  waiting.resolve(json({ message: 'old token failure' }, 403));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.connected, true);
+  assert.equal(vault.saves.length, 1);
+  assert.equal(vault.saves[0][2], secondToken);
+  assert.equal(calls.length, 4);
+});
+
+test('network timeout during unlock fails closed and releases the candidate token', async () => {
+  const vault = fakeVault({ configured: true });
+  const { client, calls } = fixture({ vault, timeoutMs: 20, handler: url => url.endsWith('/user') ? new Promise(() => {}) : undefined });
+  await assert.rejects(client.unlock(username, password), error => error instanceof OwnerAccessError && !error.uncertain);
+  assert.equal(client.connected, false);
+  assert.equal(calls[0].init.signal.aborted, true);
+  await client.readCanonical();
+  assert.equal(calls.at(-1).init.headers.Authorization, undefined);
+});
+
+test('all read methods remain available through anonymous GitHub while locked', async () => {
+  const { client, calls } = fixture({ vault: fakeVault({ configured: true }) });
+  await client.initialize();
+  assert.equal(await client.readCanonical(), '[]');
+  assert.equal((await client.readRun(9)).id, 9);
+  assert.deepEqual(await client.readJobs(9), { jobs: [] });
+  assert.equal(await client.findRun(receipt.requestId, '2026-10-18T00:00:00Z'), null);
+  assert.equal(calls.length, 4);
+  for (const { url, init } of calls) {
+    assert.ok(url.startsWith('https://api.github.com/repos/budhi-halim/seo-yuna/'));
+    assert.equal(init.headers.Authorization, undefined);
+    assert.equal(init.credentials, 'omit');
+    assert.equal(init.method, 'GET');
+  }
+});
+
+test('staging and dispatch preserve the existing receipt and work only while connected', async () => {
+  const { client, calls } = fixture({ vault: fakeVault() });
+  await client.configure(username, password, token);
+  assert.equal(await client.stageBlob('[]'), receipt.blobSha);
+  assert.deepEqual(await client.dispatch(receipt), { accepted: true, runId: 42 });
+  const body = JSON.parse(calls.at(-1).init.body);
+  assert.deepEqual(body, { ref: 'master', inputs: { payload_blob_sha: receipt.blobSha, request_id: receipt.requestId, sha256: receipt.digest } });
   client.disconnect();
-  await client.readRun(9);
-  const publicCall = calls.at(-1);
-  assert.ok(publicCall.url.startsWith('https://api.github.com/repos/budhi-halim/seo-yuna/'));
-  assert.equal(publicCall.init.headers.Authorization, undefined);
-  assert.equal(publicCall.init.headers['X-CSRF-Token'], undefined);
+  const count = calls.length;
+  await assert.rejects(client.dispatch(receipt), /local login/);
+  assert.equal(calls.length, count);
 });
 
-test('invalid receipt and run inputs cannot change request destinations', async () => {
-  let calls = 0;
-  const client = owner(async () => { calls += 1; return json(session); });
-  await client.verifyConnection();
-  await assert.rejects(client.dispatch({ ...receipt, requestId: '../elsewhere' }), /incomplete/);
-  await assert.rejects(client.dispatch({ ...receipt, requestId: 'batch-123' }), /incomplete/);
-  await assert.rejects(client.readRun('https://evil.example/1'), /Invalid/);
-  await assert.rejects(client.readJobs('../session'), /Invalid/);
-  await assert.rejects(client.findRun('x&leak=1', '2026-10-18T12:00:00Z'), /Invalid/);
-  await assert.rejects(client.findRun(receipt.requestId, 'not-a-date'), /Invalid/);
-  assert.equal(calls, 1);
+test('unknown submission outcome stays uncertain and never reflects network secrets or repeats', async () => {
+  let dispatched = 0;
+  const { client } = fixture({ vault: fakeVault(), handler: url => { if (url.endsWith('/dispatches')) {
+    dispatched += 1; throw new Error(`${username} ${password} ${token}`);
+  } } });
+  await client.configure(username, password, token);
+  await assert.rejects(client.dispatch(receipt), error => error instanceof OwnerAccessError && error.uncertain &&
+    [username, password, token].every(secret => !error.message.includes(secret)) && error.cause === undefined);
+  assert.equal(dispatched, 1);
 });
 
-test('owner reconciliation cannot mark an unrelated workflow as this submission', async () => {
-  let result = { id: 19, display_title: 'Import unrelated' };
-  const client = owner(async url => url.endsWith('/session') ? json(session) : json(result));
-  await client.verifyConnection();
-  await assert.rejects(client.findRun(receipt.requestId, '2026-10-18T12:00:00Z'), /could not be verified/);
-  result = { id: 21, display_title: `Import ${receipt.requestId}` };
-  assert.equal((await client.findRun(receipt.requestId, '2026-10-18T12:00:00Z')).id, 21);
-});
-
-test('logout posts the CSRF value and clears local authorization only after success', async () => {
-  let logout;
-  const client = owner(async (url, init) => {
-    if (url.endsWith('/session')) return json(session);
-    logout = { url, init };
-    return new Response(null, { status: 204 });
-  });
-  await client.verifyConnection();
-  await client.logout();
-  assert.equal(logout.url, 'https://owner.example.test/api/owner/auth/logout');
-  assert.equal(logout.init.headers['X-CSRF-Token'], csrf);
-  assert.equal(logout.init.credentials, 'same-origin');
+test('confirmed acceptance stays accepted if pagehide cancels reading optional run details', async () => {
+  const reading = deferred();
+  const lifecycleTarget = new EventTarget();
+  const { client } = fixture({ vault: fakeVault(), lifecycleTarget, handler: url => url.endsWith('/dispatches') ?
+    new Response(new ReadableStream({ pull() { reading.resolve(); } }, { highWaterMark: 0 }), { status: 200 }) : undefined });
+  await client.configure(username, password, token);
+  const result = client.dispatch(receipt);
+  await reading.promise;
+  lifecycleTarget.dispatchEvent(new Event('pagehide'));
+  assert.deepEqual(await result, { accepted: true, runId: null });
   assert.equal(client.connected, false);
+});
+
+test('authorization failure clears local memory while rate-limit cooldown metadata is preserved', async () => {
+  for (const [status, headers, staysConnected] of [[401, {}, false], [403, {}, false], [403, { 'Retry-After': '75' }, true]]) {
+    const { client } = fixture({ vault: fakeVault(), handler: url => url.endsWith('/runs/9') ? json({ message: token }, status, headers) : undefined });
+    await client.configure(username, password, token);
+    await assert.rejects(client.readRun(9), error => error instanceof OwnerAccessError && error.status === status &&
+      !error.message.includes(token) && (!staysConnected || error.retryAfterSeconds === 75));
+    assert.equal(client.connected, staysConnected);
+    assert.equal(client.configured, true);
+  }
+});
+
+test('blocked or corrupt local storage does not block anonymous browsing', async () => {
+  for (const savedStorage of [null, { getItem() { throw new Error(token); }, setItem() {}, removeItem() {} }, storage()]) {
+    if (savedStorage?.values) savedStorage.values.set(VAULT_STORAGE_KEY, 'not valid encrypted data');
+    const { client, calls } = fixture({ savedStorage });
+    const state = await client.initialize();
+    assert.equal(state.connected, false);
+    assert.equal(state.configured, false);
+    assert.ok(client.storageError);
+    assert.equal(client.storageError.includes(token), false);
+    assert.equal(calls.length, 0);
+    assert.equal(await client.readCanonical(), '[]');
+    assert.equal(calls[0].init.headers.Authorization, undefined);
+  }
+});
+
+test('forget removes only local setup; a removal failure still locks immediately and is reported', async () => {
+  const savedStorage = storage();
+  const { client } = fixture({ savedStorage });
+  await client.configure(username, password, token);
+  savedStorage.setItem('unrelated', 'keep');
+  assert.equal(client.forget().configured, false);
+  assert.equal(savedStorage.getItem(VAULT_STORAGE_KEY), null);
+  assert.equal(savedStorage.getItem('unrelated'), 'keep');
+  assert.equal(client.connected, false);
+
+  const badVault = fakeVault({ configured: true, forget() { this.error = new CredentialVaultError('storage_unavailable'); throw this.error; } });
+  const failed = fixture({ vault: badVault });
+  await failed.client.unlock(username, password);
+  assert.equal(failed.client.connected, true);
+  assert.throws(() => failed.client.forget(), OwnerAccessError);
+  assert.equal(failed.client.connected, false);
+  assert.equal(failed.client.configured, true);
+  assert.ok(failed.client.storageError);
 });

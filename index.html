@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#f3f1ec">
     <meta name="color-scheme" content="light dark">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://github.com">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+    <meta name="referrer" content="no-referrer">
     <meta name="description" content="Browse the Seo Yuna prompt collection and submit JSON updates.">
     <title>Seo Yuna Studio</title>
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
@@ -47,7 +48,7 @@
         </nav>
 
         <div class="connection-cluster">
-          <span id="connection-status" class="connection-status" data-state="readonly">Read only</span>
+          <span id="connection-status" class="connection-status" data-state="disconnected">Logged out</span>
           <button id="open-connect" class="button button-secondary connect-trigger" type="button" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span id="access-button-label">Owner access</span></button>
         </div>
       </header>
@@ -108,7 +109,7 @@
 
             <aside class="panel review-panel" aria-labelledby="review-title">
               <header class="panel-header"><div><span class="eyebrow">02 · Review</span><h2 id="review-title">Check &amp; submit</h2></div></header>
-              <div class="review-content"><div id="validation-output" class="validation-output" aria-live="polite"><div class="validation-empty"><svg class="icon" aria-hidden="true"><use href="#icon-file"/></svg><h3>Ready for your JSON</h3><p>Validate the input to see new themes, prompts, duplicates, and conflicts.</p></div></div><div class="submit-area"><button id="submit-button" class="button button-primary button-full" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-github"/></svg><span>Submit to GitHub</span><svg class="icon trailing-icon" aria-hidden="true"><use href="#icon-right"/></svg></button><p class="submit-note">Sign in with GitHub to submit validated JSON. This prompt collection is public.</p></div><section id="submission-status" class="submission-status" data-state="idle" aria-live="polite" aria-atomic="true" aria-labelledby="submission-title" hidden><div class="submission-status-heading"><span class="status-indicator" aria-hidden="true"></span><h3 id="submission-title">Saving your JSON…</h3></div><progress id="submission-progress" aria-label="Submission progress" max="100"></progress><p id="submission-detail">Preparing the submission.</p><div id="submission-links" class="submission-links"></div><p id="safe-to-close" class="safe-to-close" data-safe="false">Keep this tab open until the file is saved.</p></section></div>
+              <div class="review-content"><div id="validation-output" class="validation-output" aria-live="polite"><div class="validation-empty"><svg class="icon" aria-hidden="true"><use href="#icon-file"/></svg><h3>Ready for your JSON</h3><p>Validate the input to see new themes, prompts, duplicates, and conflicts.</p></div></div><div class="submit-area"><button id="submit-button" class="button button-primary button-full" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-github"/></svg><span>Submit to GitHub</span><svg class="icon trailing-icon" aria-hidden="true"><use href="#icon-right"/></svg></button><p id="submit-note" class="submit-note">Log in through Owner access to submit. This prompt collection is public.</p></div><section id="submission-status" class="submission-status" data-state="idle" aria-live="polite" aria-atomic="true" aria-labelledby="submission-title" hidden><div class="submission-status-heading"><span class="status-indicator" aria-hidden="true"></span><h3 id="submission-title">Saving your JSON…</h3></div><progress id="submission-progress" aria-label="Submission progress" max="100"></progress><p id="submission-detail">Preparing the submission.</p><div id="submission-links" class="submission-links"></div><p id="safe-to-close" class="safe-to-close" data-safe="false">Keep this tab open until the file is saved.</p></section></div>
             </aside>
           </div>
         </section>
@@ -122,17 +123,49 @@
 
     <dialog id="connect-dialog" class="studio-dialog owner-access-dialog" aria-labelledby="connect-title" aria-describedby="connect-description">
       <div class="dialog-header"><span class="dialog-icon"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg></span><button id="close-connect" class="icon-button" type="button" aria-label="Close owner access"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
+      <div class="owner-dialog-body">
       <h2 id="connect-title">Owner access</h2>
-      <p id="connect-description" class="dialog-description">Open the owner studio to sign in with GitHub and submit JSON. Browsing and copying stay available here.</p>
+      <p id="connect-description" class="dialog-description">Set up this browser once, then log in with your chosen username and password.</p>
       <section id="access-panel" class="account-access-panel" aria-labelledby="access-panel-title">
-        <h3 id="access-panel-title">GitHub account access</h3>
-        <p id="access-panel-description">The owner studio verifies your GitHub account before accepting imports.</p>
-        <p id="account-access-note" class="account-access-note">Sign-in happens on GitHub. The importer accepts changes only from budhi-halim.</p>
+        <h3 id="access-panel-title">Set up this browser</h3>
+        <p id="access-panel-description">A GitHub token connects this browser to seo-yuna. Your chosen username and password keep that token encrypted on this device.</p>
+        <div id="token-setup-guide" class="token-setup-guide">
+          <a id="create-token-link" class="button button-secondary button-full" href="https://github.com/settings/personal-access-tokens/new?name=Seo+Yuna+Studio&amp;description=Import+JSON+into+budhi-halim%2Fseo-yuna&amp;target_name=budhi-halim&amp;expires_in=90&amp;contents=write&amp;actions=write" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#icon-github"/></svg>Create GitHub token<svg class="icon trailing-icon" aria-hidden="true"><use href="#icon-external"/></svg></a>
+          <ol class="setup-instructions">
+            <li>On GitHub, choose resource owner <strong>budhi-halim</strong>.</li>
+            <li>Under <strong>Repository access</strong>, choose <strong>Only select repositories</strong> and select <strong>seo-yuna</strong>.</li>
+            <li>Check <strong>Contents</strong> and <strong>Actions</strong> are both <strong>Read and write</strong>. The link selects a 90-day expiration.</li>
+            <li>Generate the token and paste it below. Then choose the two strings you will use to log in here.</li>
+          </ol>
+        </div>
+        <form id="owner-login-form" method="dialog" autocomplete="off">
+          <div id="token-field" class="access-field">
+            <label class="input-label" for="access-token">GitHub token · one-time setup</label>
+            <input id="access-token" class="text-input" type="password" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="512" aria-describedby="token-field-help">
+            <p id="token-field-help" class="field-help">Paste a fine-grained token for seo-yuna. It is encrypted in this browser and sent only to GitHub.</p>
+          </div>
+          <div class="access-field">
+            <label class="input-label" for="access-username">Username</label>
+            <input id="access-username" class="text-input" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="256" required aria-describedby="login-field-help">
+          </div>
+          <div class="access-field">
+            <label class="input-label" for="access-password">Password</label>
+            <input id="access-password" class="text-input" type="password" autocomplete="off" maxlength="1024" required aria-describedby="login-field-help">
+          </div>
+          <div id="password-confirm-field" class="access-field">
+            <label class="input-label" for="access-password-confirm">Confirm password</label>
+            <input id="access-password-confirm" class="text-input" type="password" autocomplete="off" maxlength="1024">
+          </div>
+          <label class="show-password-label"><input id="show-access-password" type="checkbox"> Show password</label>
+          <p id="login-field-help" class="field-help">Choose your own username and a password of at least 12 characters, preferably several unrelated words. Both are case-sensitive and stay on this device.</p>
+        </form>
+        <p id="account-access-note" class="account-access-note">Setup is saved in this browser. You will need a token again after clearing site data, changing browsers, or replacing an expired token.</p>
       </section>
       <div class="repository-scope"><span>Prompt repository</span><a id="repository-link" href="https://github.com/budhi-halim/seo-yuna" target="_blank" rel="noopener noreferrer">budhi-halim/seo-yuna<svg class="icon" aria-hidden="true"><use href="#icon-external"/></svg></a></div>
-      <div id="connection-message" class="connection-message" role="status" aria-live="polite">Owner sign-in setup is not configured yet.</div>
-      <div class="dialog-actions"><button id="disconnect-button" class="button button-secondary" type="button" hidden>Sign out</button><button id="setup-button" class="button button-secondary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-github"/></svg><span id="setup-button-label">Connect GitHub once</span></button><button id="connect-button" class="button button-primary" type="button"><span id="connect-button-label">Open owner studio</span><svg class="icon" aria-hidden="true"><use href="#icon-right"/></svg></button></div>
-      <form id="owner-setup-form" method="post" action="/api/owner/setup" hidden></form>
+      <div id="connection-message" class="connection-message" role="status" aria-live="polite"></div>
+      <details id="reset-access" class="reset-access" hidden><summary>Reset or replace this connection</summary><p>Remove the encrypted token saved in this browser, then set up a new token or login. Your prompts and GitHub token are not deleted. Revoke an old token in GitHub settings if you no longer use it.</p><button id="forget-button" class="button button-danger" type="button">Remove saved connection</button></details>
+      </div>
+      <div class="dialog-actions"><button id="disconnect-button" class="button button-secondary" type="button" hidden>Log out</button><button id="connect-button" class="button button-primary" type="submit" form="owner-login-form"><span id="connect-button-label">Save &amp; log in</span><svg class="icon" aria-hidden="true"><use href="#icon-right"/></svg></button></div>
     </dialog>
 
     <dialog id="shortcuts-dialog" class="studio-dialog shortcuts-dialog" aria-labelledby="shortcuts-title"><div class="dialog-header"><span class="dialog-icon"><svg class="icon" aria-hidden="true"><use href="#icon-keyboard"/></svg></span><button id="close-shortcuts" class="icon-button" type="button" aria-label="Close keyboard shortcuts"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><h2 id="shortcuts-title">Keyboard shortcuts</h2><p class="dialog-description">Available in Prompts when you are not editing an input.</p><dl class="shortcut-definitions"><div><dt>Previous / next theme</dt><dd><kbd>A</kbd><kbd>D</kbd></dd></div><div><dt>Previous / next variation</dt><dd><kbd>W</kbd><kbd>S</kbd></dd></div><div><dt>Copy theme with number</dt><dd><kbd>Q</kbd></dd></div><div><dt>Copy theme name only</dt><dd><kbd>Q</kbd><kbd>Q</kbd></dd></div><div><dt>Copy prompt</dt><dd><kbd>E</kbd></dd></div></dl><p class="field-help">Theme and variation navigation loops at either end. Press Q twice in quick succession to copy the name without its number.</p></dialog>

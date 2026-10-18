@@ -312,7 +312,7 @@ textarea::placeholder { color: var(--faint); opacity: 1; }
 .dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: -2px -7px 16px 0; }
 .dialog-icon { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 10px; color: var(--accent); background: var(--page); }
 .dialog-icon .icon { width: 21px; height: 21px; }
-.studio-dialog > h2 { color: var(--ink-strong); font: 400 29px/1.2 var(--serif); letter-spacing: -.6px; }
+.studio-dialog > h2, .owner-dialog-body > h2 { color: var(--ink-strong); font: 400 29px/1.2 var(--serif); letter-spacing: -.6px; }
 .dialog-description { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.8; }
 .repository-scope { margin: 21px 0 22px; padding: 13px 15px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--page); }
 .repository-scope > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; }
@@ -330,8 +330,11 @@ textarea::placeholder { color: var(--faint); opacity: 1; }
 .connection-message[data-state="error"], .connection-message.error { color: var(--error); }
 .connection-message[data-state="success"], .connection-message.success { color: var(--success); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
-.owner-access-dialog { scrollbar-gutter: stable; }
-.owner-access-dialog .dialog-actions { flex-wrap: wrap; }
+.studio-dialog.owner-access-dialog { --dialog-padding: 28px; padding: 0; overflow: hidden; }
+.owner-access-dialog[open] { display: flex; flex-direction: column; }
+.owner-access-dialog .dialog-header { flex: 0 0 auto; margin: 0; padding: calc(var(--dialog-padding) - 2px) calc(var(--dialog-padding) - 7px) 16px var(--dialog-padding); background: var(--surface); }
+.owner-dialog-body { min-height: 0; padding: 0 var(--dialog-padding) 24px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.owner-access-dialog .dialog-actions { flex: 0 0 auto; flex-wrap: wrap; margin: 0; padding: 18px var(--dialog-padding); background: var(--surface); }
 .owner-access-dialog .repository-scope { margin-bottom: 0; }
 .account-access-panel { margin-top: 23px; padding: 16px 17px; border: 1px solid var(--line); border-radius: 8px; background: var(--page); }
 .account-access-panel h3 { color: var(--ink); font-size: 12px; font-weight: 600; line-height: 1.5; }
@@ -340,6 +343,19 @@ textarea::placeholder { color: var(--faint); opacity: 1; }
 .account-access-panel[data-state="ready"] { border-color: var(--success); }
 .account-access-panel[data-state="pending"] { border-color: var(--line); }
 .account-access-panel[data-state="error"] { border-color: var(--error); }
+.owner-access-dialog { width: min(540px, calc(100% - 32px)); }
+.token-setup-guide { margin-top: 16px; }
+.setup-instructions { margin: 14px 0 0; padding-left: 19px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.setup-instructions li + li { margin-top: 7px; }
+.setup-instructions strong { color: var(--ink); font-weight: 600; }
+.access-field { margin-top: 17px; }
+.access-field .field-help { margin-top: 7px; }
+.show-password-label { display: flex; align-items: center; gap: 8px; width: fit-content; margin-top: 13px; color: var(--muted); font-size: 11px; cursor: pointer; }
+.show-password-label input { width: 15px; height: 15px; accent-color: var(--accent); }
+.reset-access { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line-soft); font-size: 11px; line-height: 1.8; }
+.reset-access summary { width: fit-content; color: var(--muted); cursor: pointer; }
+.reset-access p { margin: 10px 0 12px; color: var(--muted); }
+.reset-access .button { min-height: 36px; font-size: 11px; }
 .shortcut-definitions { margin: 23px 0 19px; }
 .shortcut-definitions > div { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 43px; border-bottom: 1px solid var(--line-soft); }
 .shortcut-definitions dt { color: var(--muted); font-size: 11px; }
@@ -495,7 +511,8 @@ textarea::placeholder { color: var(--faint); opacity: 1; }
   .empty-state h2 { font-size: 24px; }
   .empty-state p { font-size: 11px; }
   .studio-dialog { width: calc(100% - 28px); max-height: calc(100svh - 28px); padding: 23px; border-radius: 12px; }
-  .studio-dialog > h2 { font-size: 27px; }
+  .studio-dialog.owner-access-dialog { --dialog-padding: 23px; }
+  .studio-dialog > h2, .owner-dialog-body > h2 { font-size: 27px; }
   .dialog-description { font-size: 11px; }
   .text-input { font-size: 16px; }
   .toast { bottom: max(18px, env(safe-area-inset-bottom)); font-size: 11px; }

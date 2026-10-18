@@ -1,34 +1,38 @@
 # Seo Yuna Studio
 
-A single-page prompt collection with keyboard navigation and JSON imports through GitHub Actions. Everyone can browse and copy prompts. Imports use **GitHub sign-in** and are restricted to the **`budhi-halim`** account.
+A single-page prompt collection with keyboard navigation and JSON imports through GitHub Actions. Everyone can browse and copy prompts. Owner access uses a GitHub token encrypted in the owner's browser and unlocked with two local strings: **Username** and **Password**.
 
-- **Public reader:** [budhi-halim.github.io/seo-yuna](https://budhi-halim.github.io/seo-yuna/)
-- **Owner studio:** [seo-yuna-owner.halimbudhiarto.chatgpt.site/studio](https://seo-yuna-owner.halimbudhiarto.chatgpt.site/studio)
+**App:** [budhi-halim.github.io/seo-yuna](https://budhi-halim.github.io/seo-yuna/)
 
-The owner studio serves the same interface with a managed backend for GitHub authorization and imports. Its hosting address does not select the sign-in provider: account verification happens through GitHub. This release supplies the owner service and its deployed address; **the owner's one-time GitHub App registration and installation are still required**. Deploying the source does not register an app or grant repository access. Until setup is complete, importing stays disabled and the owner studio offers **Connect GitHub once**.
+The app runs on GitHub Pages and communicates directly with GitHub's API. There is no hosted authentication service, OAuth redirect, or separate owner site. Login does not start a workflow. The username and password are local unlock credentials; GitHub authorizes repository requests using the unlocked token.
 
 This repository starts with the **22 themes and 156 prompts** from `budhi-halim/sakura-yuki` at commit `7131198691f24a1dbd47293993f5bf161c9c60f0`. Their text, IDs, and ordering are preserved. The original repository is independent and is never a write target of this app or its workflow.
 
-## One-time GitHub connection
+## One-time setup in each browser
 
-1. Open the [owner studio](https://seo-yuna-owner.halimbudhiarto.chatgpt.site/studio), choose **Owner access**, then **Connect GitHub once**.
-2. Choose **Continue on GitHub** and use the **`budhi-halim`** account. GitHub presents a private GitHub App registration prepared from this site's manifest. Review its requested repository permissions: **Contents: read and write** and **Actions: read and write**.
-3. Create the private app. On GitHub's installation screen, choose **Only select repositories** and select **`seo-yuna`**. Complete the installation and return to the owner studio.
-4. Choose **Sign in with GitHub** and authorize the same owner account. The header displays **budhi-halim** after the session is verified. **Submit to GitHub** becomes available after a valid batch is prepared.
+1. Open the [app](https://budhi-halim.github.io/seo-yuna/) and select **Owner access**.
+2. Select **Create GitHub token**. The link opens GitHub's fine-grained token form with the token name, resource owner, a 90-day expiration, and the two required permissions prefilled. Sign in to GitHub as **budhi-halim** if asked.
+3. Check **Resource owner → budhi-halim**. Under **Repository access**, choose **Only select repositories**, then select **seo-yuna**. The link cannot select that repository automatically.
+4. Under repository permissions, verify **Contents → Read and write** and **Actions → Read and write**. **Metadata → Read-only** is automatic. No other permissions are needed. Check the expiration; replacing an expired token will require a new setup.
+5. Generate the token and copy its full value, beginning with `github_pat_`. Return to Seo Yuna and paste it into **GitHub token · one-time setup**. Enter the token only in the app on your own device; do not put it in chat, JSON, repository files, workflow inputs, or Actions secrets.
+6. Choose your own **Username** and **Password**. These can differ completely from your GitHub account details. The password must have at least 12 characters; several unrelated words are preferable. Both fields are exact and case-sensitive, including spaces. Confirm the password.
+7. Select **Save & log in**. The app checks the token's GitHub identity, the fixed repository, and its active workflow, then saves the token encrypted in this browser. The header displays **budhi-halim** when owner access is ready.
 
-If registration succeeded but installation was interrupted, **Finish GitHub setup** resumes that connection. Complete installation before signing in. You do not need to register a new app on each browser or visit. On later visits, open the owner studio and sign in with GitHub if the existing session has expired.
+Read-only verification cannot prove all fine-grained write permissions or that no extra repositories were selected. Review step 4 carefully; GitHub enforces write permissions on each actual upload and workflow request.
 
-If a registration attempt failed before its connection could be saved, return to the owner studio and start a fresh setup. Each new attempt proposes a distinct app name so an unfinished earlier registration does not block it. A saved connection is always resumed; starting setup never replaces its credentials.
+On later visits, select **Owner access**, enter your local **Username** and **Password**, and select **Log in**. The form checks the local encrypted connection and verifies the GitHub identity directly. No Action is queued for login. Public reading and JSON validation work while logged out.
 
-The studio has no credential-entry form. GitHub handles account sign-in, and the server exchanges the authorization code and keeps the resulting GitHub credentials encrypted. An HTTP-only session cookie connects the browser to that verified account. The backend checks both the fixed GitHub user ID and the owner login before accepting writes; client-side edits cannot grant repository access.
+The setup belongs to this browser profile. A new browser or device, cleared site storage, a forgotten local login, or an expired/revoked token requires setting up a connection again. To replace it, open **Owner access → Reset or replace this connection → Remove saved connection**, then repeat setup. This removes only the browser's encrypted token; it does not revoke the token on GitHub or change any prompts. Revoke an unused or compromised token in [GitHub token settings](https://github.com/settings/personal-access-tokens).
+
+**Log out**, a page reload, and leaving or closing the tab remove the usable in-memory credential. Closing the Owner access panel after successful login keeps the current tab connected. Cancelling the panel while login is pending cancels that operation. Removing or replacing a saved connection in another tab locks this tab when its storage-change event is received.
 
 ### Repository publication
 
-The public repository is **`budhi-halim/seo-yuna`**, with **`master`** as its default branch. Keep the owner's existing Pages setting, **Deploy from a branch → master → / (root)**. The custom `Seo Yuna Studio` publisher has been verified with this configuration; switching Pages to a different source is not a setup requirement.
+The repository is **budhi-halim/seo-yuna**, with **master** as its default branch. Keep the owner's existing Pages setting, **Deploy from a branch → master → / (root)**. The custom `Seo Yuna Studio` publisher has been verified with this configuration; no Pages source change is needed for this authentication migration.
 
-A push to `master` runs the publisher. To publish again without importing, open **Actions → Seo Yuna Studio → Run workflow**, select `master`, leave all three inputs empty, and run it. Imports merge and publish in this same workflow.
+A push to master runs the publisher. To publish again without importing, open **Actions → Seo Yuna Studio → Run workflow**, select master, leave all three inputs empty, and run it. Imports merge and publish in this same workflow.
 
-The workflow uses GitHub's built-in `GITHUB_TOKEN` for its catalog commit and Pages deployment. GitHub App registration credentials belong only to the managed owner service, so they are not repository secrets or public files. Keep the `github-pages` environment free of required reviewers if imports should publish without a manual approval step. Repository rules must permit the workflow's intended update to `data.json`.
+The workflow uses GitHub's built-in `GITHUB_TOKEN` for the catalog commit and Pages deployment. You do not add a username, password, password hash, or PAT to repository secrets. Keep the `github-pages` environment free of required reviewers if imports should publish without an approval step. Repository rules must permit the workflow's intended update to data.json.
 
 ## Using the studio
 
@@ -54,14 +58,12 @@ The first Q writes to the clipboard immediately. A quick second Q replaces it wi
 
 ### Append a JSON batch
 
-1. Open the **owner studio**, sign in with GitHub, then open **Add JSON**. Sign in before selecting files or entering a draft, because sign-in navigates through GitHub.
-2. Choose **Paste JSON** for one valid JSON array, or **Upload files** to select or drop multiple JSON files. The app sorts files by filename using natural numeric order: `data_1.json`, `data_2.json`, then `data_10.json`. Review the visible ordered list before submitting.
-3. Click **Validate JSON**. Review new themes, new prompts, extended themes, and duplicate entries.
-4. Click **Submit to GitHub**. The owner service verifies your account and rechecks the batch against the current repository catalog.
-5. Keep the page open until **Accepted by GitHub** appears. After acceptance, processing continues on GitHub when the page closes.
-6. Check **Activity** or the linked GitHub run for the final result.
-
-The public reader also supports local JSON validation. Its **Owner access → Open owner studio** action opens the owner studio in a new tab and leaves the original draft intact. Files and pasted JSON are not transferred between the two origins: select the files again or copy the draft once into the owner studio. Bookmark the owner studio for everyday imports.
+1. Open **Add JSON** in the [app](https://budhi-halim.github.io/seo-yuna/). Log in through **Owner access** before submitting. Login stays on this page and preserves any selected files or pasted draft.
+2. Choose **Paste JSON** for one valid JSON array, or **Upload files** to select or drop multiple JSON files. The app sorts by filename in natural numeric order: data_1.json, data_2.json, then data_10.json. Review the visible ordered list.
+3. Select **Validate JSON**. Review new themes, prompts, extended themes, duplicates, and conflicts.
+4. Select **Submit to GitHub**. The app rechecks the latest collection, stages the data directly on GitHub, and requests the import workflow.
+5. Keep the page open until **Accepted by GitHub** and **Safe to close** appear. GitHub continues processing after the page closes.
+6. Check **Activity** or the linked GitHub run for the final result. Acceptance confirms the handoff, while the workflow still validates the batch before saving.
 
 There is one tracked JSON file: **`data.json`**. Uploaded batches are staged as Git blobs without a filename, tree entry, or commit. The workflow validates them and updates only `data.json`; it does not commit an incoming-file folder. Staging objects in a public repository is not private storage, and GitHub does not provide an app-controlled expiry or deletion guarantee for those objects. Upload only data intended for this public collection.
 
@@ -120,27 +122,23 @@ Exact duplicates across selected files are skipped as the files are combined; ne
 
 **Accepted is not a guarantee that a batch will pass validation.** The server checks the latest catalog again before writing. A conflict introduced by another batch can therefore be reported by the workflow even after a local preview was valid.
 
-Activity stores only nonsecret receipts in this browser: request IDs, checksums, Git blob SHAs, run IDs, timestamps, counts, and status. Browser storage contains neither GitHub credentials nor the JSON payload. The public reader and owner studio have separate local histories because they use different origins. Clearing browser data removes local history; the repository's Actions tab still contains the workflow runs. Closing before acceptance can leave an unsent draft that needs to be supplied again.
+Activity stores nonsecret receipts separately from the encrypted connection: request IDs, checksums, Git blob SHAs, run IDs, timestamps, counts, and status. It does not store the JSON batch, plaintext tokens, or login strings. Clearing browser data removes local history; workflow runs remain on GitHub. Previous submissions made on a different origin have their original browser history there; this app does not transfer that history.
 
-A request ID is saved before dispatch and included in the workflow run name. If the response is interrupted, the app searches for that exact run instead of automatically submitting again. Explicit retry also checks an unknown outcome first. Polling slows when disconnected and pauses in hidden tabs; the **Check status** and **Refresh** buttons provide an immediate check.
+A request ID is saved before dispatch and included in the workflow run name. If the response is interrupted, the app searches for that exact run instead of automatically submitting again. Explicit retry also checks an unknown outcome first. Polling slows when logged out and pauses in hidden tabs. There is no server-side dispatch claim, so the guarantee is append deduplication, not exactly-once workflow execution.
 
-## Authorization and storage
+## Local login and security boundaries
 
-| Component | Responsibility |
-| --- | --- |
-| Public GitHub Pages reader | Browsing, copying, local validation, and anonymous workflow status reads; it never probes owner sessions or submits imports |
-| Owner studio frontend | Same interface, plus a session check against its exact trusted HTTPS origin and fixed `/api/owner/` routes |
-| Managed owner API | GitHub sign-in, fixed owner and repository checks, batch validation, staging, dispatch, and authenticated workflow status |
-| Managed D1 database | Encrypted app configuration, encrypted sessions and temporary authorization state, plus small staged-upload and submission records |
-| GitHub repository | The sole prompt catalog, `data.json`, and the serialized import and publication workflow |
+The two strings are encoded as a versioned, unambiguous tuple. A randomly salted PBKDF2-HMAC-SHA256 derivation with 600,000 iterations produces an AES-256-GCM key. Each saved connection uses a fresh salt and nonce. Only the encrypted token and nonsecret encryption metadata are stored persistently. Wrong login details or modified ciphertext fail authenticated decryption; no plaintext password or separate password-verification hash is stored in the app or repository.
 
-GitHub App creation and repository installation happen once. Each owner session uses the app's GitHub account authorization flow. Runtime GitHub requests use the authenticated owner's user token on the server, so imports are dispatched as **`budhi-halim`** and satisfy the workflow's existing actor guard. The app installation is verified for only `seo-yuna`; the original `sakura-yuki` repository remains outside every write path.
+The username and password stay on the device. The usable token is held in memory while unlocked and is sent only in authorization headers to the fixed https://api.github.com destination. Requests omit cookies, reject redirects, and exclude upstream error bodies from user-visible errors. Logging out cancels pending authentication and clears the client credential. The app checks the fixed owner ID 121861881 and repository ID 1423899802, owner/repository names, branch, and active workflow. The workflow independently restricts imports to budhi-halim.
 
-The browser receives a short-lived CSRF value for same-origin mutations and keeps it in memory. GitHub credentials are never returned to frontend code or saved in browser storage. The server session cookie is secure and HTTP-only, and sign-out invalidates the server session. App configuration and session payloads are encrypted with a managed runtime secret that is absent from the repository. D1 does not store a second prompt catalog or the JSON batch text.
+Two fields form one combined secret, not two-factor authentication. Knowing the public code or bypassing UI checks does not supply a GitHub credential. Encryption protects the saved record while locked; it cannot protect an unlocked token from malicious code running in the page, a hostile extension, or a compromised device. Browser storage is scoped to an origin, so other project pages on budhi-halim.github.io share the browser boundary. The repository uses local scripts and fonts, strict CSP, and text rendering for prompt/JSON content.
+
+A fine-grained token is restricted to selected repositories and permission categories, not to only data.json. Choose only seo-yuna during setup. An attacker with a stolen usable token could exercise its repository permissions until it expires or is revoked. An attacker with a copied encrypted record could attempt offline guessing, which is why a memorable but strong password and a slow derivation are used. Keep the encrypted record local.
 
 ## How the workflow works
 
-The browser computes a SHA-256 checksum and sends the validated UTF-8 batch to the owner API. The server rechecks the current canonical file, stages the batch using GitHub's Git Blobs API, and records the blob SHA and digest with the verified owner. A subsequent dispatch sends only three references: the request UUID, blob SHA, and SHA-256 digest. The server accepts only a staged receipt belonging to that owner, claims the request before dispatch, and does not automatically replay an interrupted attempt. GitHub API requests are pinned to `2026-03-10`; a returned run ID allows immediate status tracking, and exact run-name lookup handles a confirmed acceptance without one.
+The browser computes a SHA-256 checksum and uploads the validated UTF-8 batch through GitHub's Git Blobs API. Dispatch sends only three references: the request UUID, blob SHA, and checksum. Login strings and the PAT are never workflow inputs. GitHub authenticates the dispatch before starting a job; the Action then uses its own GITHUB_TOKEN for validation, merge, and publication. GitHub API requests are pinned to 2026-03-10. A returned run ID allows immediate status tracking; exact run-name lookup handles a confirmed acceptance without one.
 
 The workflow accepts imports only from `budhi-halim` on `master` in `budhi-halim/seo-yuna`. It validates the file size, UTF-8 encoding, Git blob SHA, SHA-256 digest, schema, and conflicts. It then reads a current immutable snapshot of the catalog and writes `data.json` with an optimistic SHA check. If another writer changes the catalog, it rereads and remerges within a bounded retry loop.
 
@@ -148,50 +146,47 @@ Merging and deployment share one concurrency group with `cancel-in-progress: fal
 
 Publication happens in the same workflow. Commits made with `GITHUB_TOKEN` do not start another push workflow, so an independent push-only deployment would miss these imports. A normal code push still runs the same publisher. Manual repository edits are outside this app’s append-only import policy; avoid editing `data.json` while troubleshooting a run unless you intend to change the canonical collection.
 
-Official Actions are pinned to full commit SHAs. The frontend and repository scripts have no npm dependencies, external scripts, or external fonts. The static build copies only the public HTML, assets, canonical JSON, and rulebook into `_site`, and adds a `version.txt` commit marker. Backend source, tests, workflow source, and documentation are not included in that Pages build. The owner service is deployed separately on managed hosting; it serves the same frontend and reads the published catalog through a server route instead of storing another catalog file.
+Official Actions are pinned to full commit SHAs. The frontend and repository scripts have no npm dependencies, external scripts, or external fonts. The static build copies only public HTML, assets, the canonical JSON, and rulebook into _site, plus a version.txt commit marker. Backend hosting and deployment adapters are not used.
 
 ## Development and verification
 
-Use Node.js 22.18 or later. No package installation is required.
+Use Node.js 22.18 or later. No package installation is required for the application or unit tests.
 
 ```sh
 node --test tests/*.test.mjs
 node tools/build-site.mjs
 ```
 
-Serve `_site` with a local static HTTP server for development. The production import actions still target the explicitly configured GitHub repository. The scripts refuse workflow events that target the old repository or an unexpected branch/actor.
+Serve _site with a local static HTTP server for development. Production imports always target the fixed GitHub repository. Automated tests use synthetic credentials and mocked GitHub requests; never put a real token in a test fixture.
 
-For individual owner-client test output, run `node tests/owner-client.test.mjs`. The auth, setup, and API tests exercise server identity checks, CSRF, encrypted state, callback replay protection, and uncertain dispatch outcomes without real account credentials.
-
-The managed owner checkout is separate from the Pages build. `node tools/sync-owner.mjs /path/to/prepared-owner-checkout` copies this repository's frontend, server modules, route adapters, and schema into an already registered server Site with a `DB` binding. Deployment must provision the schema, the fixed `APP_ORIGIN`, and the secret `APP_CREDENTIAL_KEY` in that host. The synchronization tool does not read or export credentials. Publishing these source updates preserves the distinction between deployed code and the owner's GitHub registration step.
+For optional browser integration checks, install Playwright and Chromium in your development environment, then run `node tests/browser-check.mjs`. Set `SEO_YUNA_CHROMIUM` to an alternate Chromium executable if needed. The script starts a local server and fresh browser profiles, mocks GitHub, blocks other external requests, and makes no live writes. It checks the public reader, local setup and login, cancellation, draft preservation, submission handoff, recovery, and the mobile dialog. Screenshots are written outside the repository; `SEO_YUNA_QA_DIR` can change their destination. The application and unit-test gate remain dependency-free.
 
 | File | Purpose |
 | --- | --- |
-| `index.html`, `assets/style.css`, `assets/favicon.svg` | Single-page interface and visual design |
-| `assets/app.mjs` | Navigation, clipboard actions, validation UI, GitHub account controls, and submission history |
-| `assets/owner-client.mjs` | Exact-origin owner session facade, CSRF-protected imports, and public status fallback |
-| `assets/shortcuts.mjs` | Keyboard gesture and looping navigation rules |
-| `assets/selector-search.mjs` | Number-and-name filtering that preserves displayed positions and current selection |
-| `assets/github.mjs` | Fixed-repository GitHub API client; anonymous in the browser and authenticated only on the owner server |
-| `assets/receipts.mjs` | Explicit nonsecret browser-storage schema |
-| `assets/import-batch.mjs` | Deterministic filename sorting and atomic multi-file batch preparation |
-| `owner/auth.mjs` | GitHub account authorization, encrypted sessions, fixed owner checks, and CSRF |
-| `owner/setup.mjs` | One-time private GitHub App manifest registration and repository installation |
-| `owner/github-app.mjs` | Server-only GitHub App and installation verification |
-| `owner/api.mjs` | Fixed owner import routes, staged receipt binding, and durable dispatch claims |
-| `owner/sites-route.ts`, `owner/sites-data-route.ts` | Managed server adapters for the owner API and the published catalog |
-| `owner/sites-schema.ts`, `owner/schema.sql` | D1 schema for encrypted authorization state and nonsecret submission records |
-| `assets/catalog.mjs` | Shared schema validation and immutable append logic |
-| `tools/import-data.mjs` | Workflow validation, integrity checks, and conflict-safe catalog commit |
-| `tools/build-site.mjs` | Explicit static-site build |
-| `tools/sync-owner.mjs` | Copies source into a separate prepared owner-server checkout |
-| `.github/workflows/studio.yml` | Serialized import and Pages deployment |
-| `tests/` | Validation, concurrency retry, security boundaries, receipts, API behavior, and keyboard tests |
+| index.html, assets/style.css, assets/favicon.svg | Single-page interface and local login forms |
+| assets/app.mjs | Reader, clipboard, local login controls, validation, and Activity |
+| assets/credential-vault.mjs | Password-derived authenticated encryption and browser storage |
+| assets/owner-client.mjs | Local credential lifecycle and direct GitHub imports |
+| assets/github.mjs | Fixed-repository GitHub API client and status descriptions |
+| assets/shortcuts.mjs | Keyboard gestures and looping navigation |
+| assets/selector-search.mjs | Number-and-name filtering |
+| assets/receipts.mjs | Nonsecret submission receipt schema |
+| assets/import-batch.mjs | Deterministic multi-file sorting and atomic preparation |
+| assets/catalog.mjs | Shared schema and immutable append logic |
+| tools/import-data.mjs | Workflow validation, integrity checks, and conflict-safe commit |
+| tools/build-site.mjs | Explicit static build |
+| .github/workflows/studio.yml | Serialized import and Pages deployment |
+| tests/ | Credential lifecycle, security boundaries, imports, API behavior, and reader tests |
 
-## GitHub references
+## Retiring the previous owner connection
 
-- [Workflow dispatch REST API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
-- [Git blobs REST API](https://docs.github.com/en/rest/git/blobs)
-- [Workflow concurrency and larger queues](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
-- [Custom GitHub Pages workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
-- [OWASP browser storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html)
+This release no longer opens or calls the previous hosted owner studio. Removing source dependencies does not revoke an already installed GitHub App or delete an existing hosted deployment. After the direct connection works, the owner can revoke the previous Seo Yuna app under **GitHub Settings → Applications → Authorized GitHub Apps**, and uninstall that same app under **Installed GitHub Apps**. Identify the app created for Seo Yuna; leave unrelated installations alone. These are separate cleanup steps from local token setup.
+
+## References
+
+- [Fine-grained personal access tokens and setup links](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+- [Workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
+- [Git blobs API](https://docs.github.com/en/rest/git/blobs)
+- [Web Crypto key derivation](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/deriveKey)
+- [OWASP password storage guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+- [GitHub App authorization revocation](https://docs.github.com/en/apps/using-github-apps/reviewing-and-revoking-authorization-of-github-apps)

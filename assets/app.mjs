@@ -1,6 +1,7 @@
 import { MAX_IMPORT_BYTES, parseCatalog, validateCatalog, mergeCatalog } from './catalog.mjs';
 import { REPOSITORY_URL, runUrl, describeRun } from './github.mjs';
 import { OwnerClient } from './owner-client.mjs';
+import { VAULT_STORAGE_KEY } from './credential-vault.mjs';
 import { createShortcutHandler, wrapIndex } from './shortcuts.mjs';
 import { readReceipts, writeReceipts } from './receipts.mjs';
 import { sortFiles, buildFileBatch } from './import-batch.mjs';
@@ -22,9 +23,11 @@ let fileError = '';
 let fileReadVersion = 0;
 let validation = null;
 let busy = false;
-const client = new OwnerClient();
+const client = new OwnerClient({ storage });
 let accessBusy = false;
 let accessMessage = '';
+let accessMessageState = 'info';
+let accessReady = false;
 let accessGeneration = 0;
 let receipts = readReceipts(storage);
 let selectedReceiptId = receipts[0]?.requestId ?? null;
@@ -32,6 +35,7 @@ let storageAvailable = true;
 let toastTimer;
 let pollTimer;
 let polling = false;
+let githubRetryAt = 0;
 let pollCursor = 0;
 let copySequence = 0;
 let catalogLoadGeneration = 0;
@@ -64,6 +68,13 @@ function toast(message) {
     $('toast').classList.remove('is-visible');
     $('toast').hidden = true;
   }, 3000);
+}
+
+function respectGitHubRetry(error) {
+  const seconds = error?.retryAfterSeconds;
+  if (Number.isSafeInteger(seconds) && seconds > 0 && seconds <= 86400) {
+    githubRetryAt = Math.max(githubRetryAt, Date.now() + seconds * 1000);
+  }
 }
 
 function setView(view) {
@@ -372,6 +383,7 @@ async function dispatchRecord(record) {
     validation = null;
     toast('Batch accepted · safe to close');
   } catch (error) {
+    respectGitHubRetry(error);
     Object.assign(record, { state: error.uncertain ? 'unknown' : 'rejected', title: error.uncertain ? 'Acceptance not confirmed' : 'Not submitted', detail: error.message, progress: 20, safe: false, terminal: !error.uncertain });
     saveReceipt(record);
   }
@@ -396,6 +408,7 @@ async function submitInput() {
     await dispatchRecord({ requestId: crypto.randomUUID(), blobSha, digest, createdAt: new Date().toISOString(), runId: null,
       themeCount: batch.incoming.length, variationCount: batch.incoming.reduce((total, theme) => total + theme.variations.length, 0) });
   } catch (error) {
+    respectGitHubRetry(error);
     showSubmission({ state: 'rejected', title: 'Not submitted', detail: error.message || 'The batch could not be submitted. Validate it and try again.', safe: false, progress: 0 });
   } finally { setBusy(false); }
 }
@@ -426,6 +439,7 @@ function refreshReceipt(record) {
 
 async function performReceiptRefresh(record) {
   try {
+    if (Date.now() < githubRetryAt) throw new Error(`GitHub asked to wait ${Math.ceil((githubRetryAt - Date.now()) / 1000)} seconds before checking again.`);
     let run;
     if (!record.runId) {
       run = await client.findRun(record.requestId, record.createdAt);
@@ -449,6 +463,7 @@ async function performReceiptRefresh(record) {
       catch { toast('Publication finished. Refresh the page to load the updated collection.'); }
     }
   } catch (error) {
+    respectGitHubRetry(error);
     // A failed status check cannot revoke an earlier acceptance or claim a workflow failure.
     record.detail = `${error.message} ${record.safe ? 'GitHub already accepted this batch; closing the page will not stop it.' : 'Acceptance is still unconfirmed.'}`;
     record.checkedAt = new Date().toISOString();
@@ -464,7 +479,7 @@ function pendingReceipts() {
 function schedulePoll(delay = client.connected ? 15000 : 180000) {
   clearTimeout(pollTimer);
   if (document.hidden || !pendingReceipts().length) return;
-  pollTimer = setTimeout(pollOnce, delay);
+  pollTimer = setTimeout(pollOnce, Math.max(delay, githubRetryAt - Date.now()));
 }
 
 async function pollOnce() {
@@ -517,94 +532,100 @@ function renderActivity() {
   }));
 }
 
+function clearAccessInputs() {
+  for (const id of ['access-token', 'access-username', 'access-password', 'access-password-confirm']) $(id).value = '';
+  $('show-access-password').checked = false;
+  $('access-password').type = 'password';
+  $('access-password-confirm').type = 'password';
+}
+
 function updateAccessControls() {
-  const inOwnerStudio = client.ownerContext;
   const configured = client.configured;
-  const installationReady = client.installationReady;
-  const authorized = client.authorized;
   const connected = client.connected;
-  const checked = client.sessionChecked;
-  const needsSetup = inOwnerStudio && checked && (!configured || !installationReady);
-  const waiting = busy || accessBusy;
+  const unavailable = accessReady && !client.storageAvailable;
+  const waiting = busy || accessBusy || !accessReady;
+  const setup = !configured;
   const status = $('connection-status');
   const panel = $('access-panel');
 
   $('open-connect').disabled = waiting;
   $('access-button-label').textContent = 'Owner access';
-  $('connect-title').textContent = 'Owner access';
-  $('access-panel-title').textContent = 'GitHub account access';
-  $('account-access-note').textContent = 'Sign-in happens on GitHub. The importer accepts changes only from budhi-halim.';
-  $('setup-button').hidden = !needsSetup;
-  $('setup-button').disabled = waiting;
-  $('setup-button-label').textContent = configured ? 'Finish GitHub setup' : 'Connect GitHub once';
-  $('disconnect-button').hidden = !inOwnerStudio || !authorized;
+  $('connect-title').textContent = connected ? 'Owner access' : configured ? 'Log in' : 'Set up owner access';
+  $('access-panel-title').textContent = connected ? 'Connected as budhi-halim' : configured ? 'Your local login' : 'Set up this browser';
+  $('connect-description').textContent = connected
+    ? 'You can submit prompt updates from this page.'
+    : configured
+      ? 'Enter the two strings you chose when setting up this browser.'
+      : 'Connect this browser once, then use your own username and password to log in.';
+  $('access-panel-description').textContent = connected
+    ? 'Your GitHub token is unlocked for this tab. Log out or close the tab to lock it again.'
+    : configured
+      ? 'Your username and password unlock the saved GitHub token on this device. They are not sent to GitHub.'
+      : 'A GitHub token connects this browser to seo-yuna. Your chosen username and password keep it encrypted on this device.';
+  $('token-setup-guide').hidden = !setup || connected || unavailable;
+  $('token-field').hidden = !setup;
+  $('password-confirm-field').hidden = !setup;
+  $('owner-login-form').hidden = connected || unavailable;
+  $('access-token').required = setup && !connected;
+  $('access-password-confirm').required = setup && !connected;
+  $('access-password').minLength = setup ? 12 : 1;
+  $('login-field-help').textContent = setup
+    ? 'Choose your own username and a password of at least 12 characters, preferably several unrelated words. Both are case-sensitive and stay on this device.'
+    : 'Both strings are case-sensitive. Use the exact spaces and characters you chose during setup.';
+  for (const input of all('#owner-login-form input')) input.disabled = waiting || connected || unavailable;
+  $('disconnect-button').hidden = !connected;
   $('disconnect-button').disabled = waiting;
-  $('connect-button').hidden = inOwnerStudio && authorized;
-  $('connect-button').disabled = waiting || (inOwnerStudio ? !configured || !installationReady || !checked : !client.ownerStudioUrl);
-  $('connect-button-label').textContent = inOwnerStudio ? 'Sign in with GitHub' : 'Open owner studio';
-  $('connect-button').title = inOwnerStudio ? 'Sign in with your GitHub account' : 'Open the owner studio in a new tab';
+  $('connect-button').hidden = connected || unavailable;
+  $('connect-button').disabled = waiting;
+  $('connect-button-label').textContent = accessBusy ? (setup ? 'Connecting…' : 'Logging in…') : setup ? 'Save & log in' : 'Log in';
+  $('connect-button').title = setup ? 'Verify GitHub access and encrypt the token in this browser' : 'Unlock this browser’s saved GitHub token';
+  $('reset-access').hidden = unavailable || (!configured && !client.storageError);
+  $('forget-button').disabled = waiting;
+  $('submit-note').textContent = connected
+    ? 'The validated batch is sent directly to GitHub. This collection is public.'
+    : 'Log in through Owner access to submit. This prompt collection is public.';
 
-  let message;
-  if (!inOwnerStudio) {
-    status.textContent = 'Read only';
-    status.dataset.state = 'readonly';
-    panel.dataset.state = client.ownerStudioUrl ? 'pending' : 'error';
-    $('connect-description').textContent = 'Open the owner studio to sign in with GitHub and submit JSON. Browsing and copying stay available here.';
-    $('access-panel-description').textContent = 'The owner studio verifies your GitHub account before accepting imports.';
-    message = client.ownerStudioUrl
-      ? 'The owner studio opens in a new tab. Complete the one-time GitHub setup if prompted, then select your files there. Pasted or selected JSON stays on this page.'
-      : 'Owner sign-in setup is not configured yet. Browsing, copying, and JSON validation remain available.';
-  } else if (accessBusy) {
-    status.textContent = 'Checking account…';
+  if (waiting && accessBusy) {
+    status.textContent = 'Checking access…';
     status.dataset.state = 'pending';
     panel.dataset.state = 'pending';
-    $('connect-description').textContent = 'Checking GitHub account access for this owner studio.';
-    $('access-panel-description').textContent = 'The secure importer is checking the current sign-in session.';
-    message = 'Checking account access…';
   } else if (connected) {
     status.textContent = 'budhi-halim';
     status.dataset.state = 'connected';
     panel.dataset.state = 'ready';
-    $('connect-description').textContent = 'Signed in with GitHub as budhi-halim.';
-    $('access-panel-description').textContent = 'This account can submit validated JSON to the prompt collection.';
-    message = 'Owner access is ready. Close this panel to continue your import.';
-  } else if (needsSetup) {
-    status.textContent = 'Setup required';
-    status.dataset.state = 'pending';
-    panel.dataset.state = 'pending';
-    $('connect-description').textContent = 'Complete the one-time GitHub connection before signing in.';
-    $('access-panel-description').textContent = configured
-      ? 'Finish installing the GitHub App for the seo-yuna repository. Then sign in with GitHub.'
-      : 'Connect GitHub once for this studio. Then use GitHub sign-in on later visits.';
-    message = configured
-      ? 'The GitHub App is configured, but its repository installation is not complete.'
-      : 'GitHub sign-in is not configured yet. Choose Connect GitHub once to set it up.';
+  } else if (unavailable || (!configured && client.storageError)) {
+    status.textContent = 'Access unavailable';
+    status.dataset.state = 'error';
+    panel.dataset.state = 'error';
   } else {
-    status.textContent = checked ? 'Signed out' : 'Access unavailable';
-    status.dataset.state = checked ? 'disconnected' : 'error';
-    panel.dataset.state = checked ? 'pending' : 'error';
-    $('connect-description').textContent = 'Sign in with GitHub to submit JSON as budhi-halim.';
-    $('access-panel-description').textContent = 'Sign in first, then choose the JSON files you want to import.';
-    message = checked ? 'Your GitHub account is checked before imports are accepted.' : 'The owner sign-in service could not be verified. Reopen this panel to check again.';
+    status.textContent = configured ? 'Logged out' : 'Setup required';
+    status.dataset.state = 'disconnected';
+    panel.dataset.state = 'pending';
   }
-  $('connection-message').textContent = accessMessage || message;
-  $('connection-message').dataset.state = accessMessage ? 'error' : connected ? 'success' : 'info';
+  $('account-access-note').textContent = 'Setup is saved in this browser. You will need a token again after clearing site data, changing browsers, or replacing an expired token.';
+  $('connection-message').textContent = accessMessage || client.storageError || (connected ? 'Owner access is ready. Close this panel to continue your import.' : '');
+  $('connection-message').dataset.state = accessMessage ? accessMessageState : client.storageError ? 'error' : connected ? 'success' : 'info';
 }
 
-async function refreshOwnerSession() {
-  if (!client.ownerContext || accessBusy || busy) return;
+async function initializeOwnerAccess(message = '') {
   const generation = ++accessGeneration;
   accessBusy = true;
   accessMessage = '';
+  accessMessageState = 'info';
   updateButtons();
-  try { await client.verifyConnection(); }
-  catch (error) { if (generation === accessGeneration) accessMessage = error.message || 'Owner account access could not be verified.'; }
-  finally {
+  try {
+    await client.initialize();
+    if (generation === accessGeneration) accessMessage = message;
+  } catch {
     if (generation === accessGeneration) {
+      accessMessage = 'This browser’s saved connection could not be read. Check that site storage is available.';
+      accessMessageState = 'error';
+    }
+  } finally {
+    if (generation === accessGeneration) {
+      accessReady = true;
       accessBusy = false;
       updateButtons();
-      renderActivity();
-      schedulePoll(1000);
     }
   }
 }
@@ -612,51 +633,113 @@ async function refreshOwnerSession() {
 function openAccess() {
   shortcuts.reset();
   accessMessage = '';
+  accessMessageState = 'info';
   updateAccessControls();
   if (!$('connect-dialog').open) $('connect-dialog').showModal();
-  if (client.ownerContext && !accessBusy && !busy) void refreshOwnerSession();
+  if (!client.connected && client.storageAvailable) {
+    $(client.configured ? 'access-username' : 'access-token').focus({ preventScroll: true });
+  }
 }
 
-function connectOwner() {
-  if (busy || accessBusy) return;
-  if (!client.ownerContext) {
-    if (!client.ownerStudioUrl) { updateAccessControls(); return; }
-    const url = new URL(client.ownerStudioUrl);
-    url.hash = 'import';
-    // A separate tab preserves the JSON selected or pasted in the public reader.
-    window.open(url.href, '_blank', 'noopener,noreferrer');
+async function submitCredentials(event) {
+  event.preventDefault();
+  if (busy || accessBusy || !accessReady || client.connected || !client.storageAvailable) return;
+  if (!$('owner-login-form').reportValidity()) return;
+  const setup = !client.configured;
+  if (setup && [...$('access-password').value].length < 12) {
+    accessMessage = 'Choose a password with at least 12 characters, preferably several unrelated words.';
+    accessMessageState = 'error';
+    updateAccessControls();
+    $('access-password').focus();
     return;
   }
-  if (client.loginUrl && !client.authorized) {
-    accessBusy = true;
-    updateButtons();
-    window.location.assign(client.loginUrl);
+  if (setup && $('access-password').value !== $('access-password-confirm').value) {
+    accessMessage = 'The password and confirmation do not match.';
+    accessMessageState = 'error';
+    updateAccessControls();
+    $('access-password-confirm').focus();
+    return;
   }
-}
-
-function setupOwner() {
-  if (busy || accessBusy || !client.ownerContext || !client.sessionChecked || !client.setupUrl || (client.configured && client.installationReady)) return;
-  const form = $('owner-setup-form');
-  form.action = client.setupUrl;
+  const generation = ++accessGeneration;
   accessBusy = true;
-  updateButtons();
-  form.requestSubmit();
-}
-
-async function signOutOwner() {
-  if (busy || accessBusy || !client.ownerContext || !client.authorized) return;
-  accessBusy = true;
-  accessMessage = '';
+  accessMessage = setup ? 'Checking GitHub access and saving this browser’s encrypted connection…' : 'Unlocking locally and checking GitHub access…';
+  accessMessageState = 'info';
   updateButtons();
   try {
-    await client.logout();
-    window.location.reload();
+    // Call with current field values; clear the form while the operation is pending.
+    const operation = setup
+      ? client.configure($('access-username').value, $('access-password').value, $('access-token').value)
+      : client.unlock($('access-username').value, $('access-password').value);
+    clearAccessInputs();
+    await operation;
+    if (generation !== accessGeneration) return;
+    accessMessage = setup ? 'Connection saved in this browser. You are logged in as budhi-halim.' : 'Logged in as budhi-halim. You can submit your JSON now.';
+    accessMessageState = 'success';
+    githubRetryAt = 0;
+    $('reset-access').open = false;
+    toast('Owner access ready');
+    schedulePoll(1000);
   } catch (error) {
-    accessMessage = error.message || 'Sign-out could not be confirmed. Please try again.';
+    if (generation !== accessGeneration) return;
+    respectGitHubRetry(error);
+    accessMessage = error.message || 'Login could not be completed. Check your details and try again.';
+    accessMessageState = 'error';
   } finally {
-    accessBusy = false;
-    updateButtons();
+    if (generation === accessGeneration) {
+      accessBusy = false;
+      updateButtons();
+      if (!client.connected) $(client.configured ? 'access-username' : 'access-token').focus({ preventScroll: true });
+    }
   }
+}
+
+function signOutOwner() {
+  if (busy || accessBusy) return;
+  accessGeneration += 1;
+  client.disconnect();
+  clearAccessInputs();
+  accessMessage = 'Logged out. Your encrypted connection is saved for the next login.';
+  accessMessageState = 'info';
+  updateButtons();
+  schedulePoll();
+  $('access-username').focus({ preventScroll: true });
+}
+
+async function forgetOwner() {
+  if (busy || accessBusy) return;
+  const generation = ++accessGeneration;
+  accessBusy = true;
+  updateButtons();
+  clearAccessInputs();
+  try {
+    await client.forget();
+    if (generation !== accessGeneration) return;
+    accessMessage = 'Saved connection removed from this browser. Set up a token and new login to reconnect.';
+    accessMessageState = 'info';
+    $('reset-access').open = false;
+  } catch (error) {
+    if (generation === accessGeneration) {
+      accessMessage = error.message || 'The saved connection could not be removed.';
+      accessMessageState = 'error';
+    }
+  } finally {
+    if (generation === accessGeneration) {
+      accessBusy = false;
+      updateButtons();
+    }
+  }
+}
+
+function closeAccess() {
+  if (accessBusy) {
+    accessGeneration += 1;
+    client.disconnect();
+    accessBusy = false;
+    accessMessage = '';
+  }
+  clearAccessInputs();
+  shortcuts.reset();
+  updateButtons();
 }
 
 all('[data-view]').forEach(button => {
@@ -722,11 +805,14 @@ $('drop-zone').addEventListener('drop', event => { if (!busy) acceptFiles(event.
 $('validate-button').addEventListener('click', validateInput);
 $('submit-button').addEventListener('click', submitInput);
 $('open-connect').addEventListener('click', openAccess);
-$('connect-button').addEventListener('click', connectOwner);
-$('setup-button').addEventListener('click', setupOwner);
+$('owner-login-form').addEventListener('submit', submitCredentials);
+$('forget-button').addEventListener('click', forgetOwner);
+$('show-access-password').addEventListener('change', event => {
+  for (const id of ['access-password', 'access-password-confirm']) $(id).type = event.target.checked ? 'text' : 'password';
+});
 $('disconnect-button').addEventListener('click', signOutOwner);
 $('close-connect').addEventListener('click', () => $('connect-dialog').close());
-$('connect-dialog').addEventListener('close', () => shortcuts.reset());
+$('connect-dialog').addEventListener('close', closeAccess);
 $('repository-link').href = REPOSITORY_URL;
 $('open-shortcuts').addEventListener('click', () => { shortcuts.reset(); $('shortcuts-dialog').showModal(); });
 $('close-shortcuts').addEventListener('click', () => $('shortcuts-dialog').close());
@@ -742,14 +828,21 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) clearTimeout(pollTimer);
   else {
     schedulePoll(1000);
-    if (client.ownerContext && !busy && !accessBusy) void refreshOwnerSession();
   }
 });
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('hashchange', () => setView(location.hash.slice(1)));
-window.addEventListener('pagehide', () => { accessGeneration += 1; client.disconnect(); clearTimeout(pollTimer); });
+window.addEventListener('pagehide', () => {
+  accessGeneration += 1; client.disconnect(); clearAccessInputs(); clearTimeout(pollTimer);
+});
 window.addEventListener('pageshow', event => {
-  if (event.persisted && client.ownerContext) { accessBusy = false; void refreshOwnerSession(); }
+  if (event.persisted) { accessBusy = false; void initializeOwnerAccess('Log in again to submit updates.'); }
+});
+window.addEventListener('storage', event => {
+  if (event.storageArea !== storage || (event.key !== VAULT_STORAGE_KEY && event.key !== null)) return;
+  client.disconnect();
+  clearAccessInputs();
+  void initializeOwnerAccess('This browser’s saved connection changed in another tab. Log in again to submit updates.');
 });
 
 setView(location.hash.slice(1));
@@ -757,7 +850,7 @@ setInputMode('paste');
 updateAccessControls();
 renderActivity();
 if (receipts[0]) showSubmission(receipts[0]);
-const accountCheck = client.ownerContext ? refreshOwnerSession() : Promise.resolve();
+const accountCheck = initializeOwnerAccess();
 try { await loadPublishedCatalog(); }
 catch (error) { $('prompt-output').textContent = error.message || 'The collection could not be loaded. Refresh this page to try again.'; }
 await accountCheck;
