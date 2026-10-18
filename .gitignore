@@ -3,3 +3,8 @@ _site/
 .DS_Store
 node_modules/
 *.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key

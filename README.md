@@ -138,6 +138,7 @@ Serve `_site` with a local static HTTP server for development. The production im
 | `assets/github.mjs` | Browser GitHub API client and workflow status interpretation |
 | `assets/receipts.mjs` | Explicit nonsecret browser-storage schema |
 | `assets/import-batch.mjs` | Deterministic filename sorting and atomic multi-file batch preparation |
+| `owner/github-app.mjs` | Server-only GitHub App client, ready for either selected account provider; not yet connected to a hosted endpoint |
 | `assets/catalog.mjs` | Shared schema validation and immutable append logic |
 | `tools/import-data.mjs` | Workflow validation, integrity checks, and conflict-safe catalog commit |
 | `tools/build-site.mjs` | Explicit static-site build |
